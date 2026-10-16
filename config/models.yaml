@@ -1,0 +1,49 @@
+# Model router config. Agents ask for a role; the router walks the chain in order.
+# All model ids are PLACEHOLDERS. Confirm exact ids in the provider console before use.
+# Failure = timeout, rate limit, malformed output, or failed schema/rule check.
+
+providers:
+  gemini_api:        # Gemma 4 via Google AI Studio / Gemini API key
+    api_key_env: GEMINI_API_KEY
+  ollama:            # Local Gemma 4 (optional offline mode)
+    base_url: http://localhost:11434
+  jev:               # Optional, only if hackathon access is available
+    api_key_env: JEV_API_KEY
+  sarvam:            # Indic speech and translation
+    api_key_env: SARVAM_API_KEY
+
+defaults:
+  timeout_s: 30
+  max_retries_per_model: 1
+  log_events: true
+
+models:
+  gemma_big:   { provider: gemini_api, id: gemma-4-26b-a4b-it }   # TODO verify id
+  gemma_small: { provider: gemini_api, id: gemma-4-e4b-it }       # TODO verify id
+  gemma_local: { provider: ollama,     id: gemma4:e4b }           # TODO verify tag
+  jev_fast:    { provider: jev,        id: TODO }
+  sarvam_stt:  { provider: sarvam,     id: TODO }
+  sarvam_tts:  { provider: sarvam,     id: TODO }
+  sarvam_tr:   { provider: sarvam,     id: TODO }
+
+roles:
+  intake:     { chain: [gemma_big, gemma_small, text_only],       timeout_s: 45 }
+  architect:  { chain: [gemma_big, gemma_small, linear_path] }
+  teacher:    { chain: [gemma_big, gemma_small, cached_lesson] }
+  critic:     { chain: [gemma_big, gemma_small, rule_checks] }
+  quizzer:    { chain: [gemma_small, gemma_big, cached_questions] }
+  diagnoser:  { chain: [jev_fast, gemma_small, exact_match],      timeout_s: 10 }
+  rewriter:   { chain: [gemma_small, gemma_big, insert_review_step] }
+  companion:  { chain: [gemma_small, gemma_big, template_message] }
+  # Extension (not one of the 8 agents): grounded answers to a student's spoken/typed doubt (F9).
+  doubt:      { chain: [gemma_small, gemma_big, template_answer] }
+
+services:
+  speech_to_text: { chain: [sarvam_stt, text_only_mode] }
+  text_to_speech: { chain: [sarvam_tts, no_audio] }
+  translate:      { chain: [sarvam_tr, gemma_small] }
+
+# Non-model steps referenced in chains (implemented in code, never call a model):
+#   text_only, linear_path, cached_lesson, rule_checks, cached_questions,
+#   exact_match, insert_review_step, template_message, text_only_mode, no_audio,
+#   template_answer

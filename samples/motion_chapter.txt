@@ -1,0 +1,17 @@
+Motion and Rest
+
+An object is in motion if its position changes with time with respect to a reference point. An object is at rest if its position does not change with time with respect to the same reference point. A passenger sitting in a moving bus is at rest with respect to the bus but in motion with respect to a tree outside.
+
+Distance is the total length of the path travelled by an object. Distance is a scalar quantity because it has only magnitude. Displacement is the shortest straight line from the starting point to the final point, with a direction. Displacement is a vector quantity. If a runner completes one full lap of a circular track, the distance is the length of the track but the displacement is zero.Speed and Velocity
+
+Speed is the distance travelled by an object in one unit of time. The SI unit of speed is metre per second (m/s). Speed is a scalar quantity because it has magnitude only. Average speed is the total distance travelled divided by the total time taken.
+
+Velocity is the displacement of an object in one unit of time, so velocity has both magnitude and direction. Velocity is a vector quantity. A car moving at 60 km/h towards the north has a velocity of 60 km/h north. Two cars with the same speed can have different velocities if they move in different directions.Acceleration
+
+Acceleration is the rate of change of velocity with time. Acceleration is calculated as the change in velocity divided by the time taken. The SI unit of acceleration is metre per second squared (m/s^2). If the velocity of an object increases by 10 m/s in 5 s, its acceleration is 2 m/s^2.
+
+When an object moves in a straight line with constant acceleration, its motion is called uniformly accelerated motion. When the velocity of an object decreases with time, the acceleration is negative and is called retardation or deceleration. An object moving with a constant velocity has zero acceleration.Graphs of Motion
+
+In a distance-time graph, time is plotted on the horizontal axis and distance on the vertical axis. A straight line sloping upwards shows that the object moves with a constant speed. The slope of a distance-time graph gives the speed of the object. A horizontal line in a distance-time graph shows that the object is at rest.
+
+In a velocity-time graph, a straight line parallel to the time axis shows constant velocity. A straight line sloping upwards shows uniform acceleration. The area under a velocity-time graph gives the displacement of the object.

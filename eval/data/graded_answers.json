@@ -1,0 +1,205 @@
+{
+ "_note": "DRAFT expected labels written by the developer. A teacher must review before the 80% claim is reported.",
+ "questions": [
+  {
+   "text": "A runner completes one full lap of a circular track. What is the displacement?",
+   "options": [
+    "Zero",
+    "The length of the track",
+    "Half the length of the track",
+    "Cannot be found"
+   ],
+   "answer_key": "Zero",
+   "concept": "distance vs displacement",
+   "id": "q1",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  },
+  {
+   "text": "Which quantity has both magnitude and direction?",
+   "options": [
+    "Speed",
+    "Distance",
+    "Velocity",
+    "Time"
+   ],
+   "answer_key": "Velocity",
+   "concept": "speed vs velocity",
+   "id": "q2",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  },
+  {
+   "text": "A car's velocity rises by 10 m/s in 5 s. What is its acceleration?",
+   "options": [
+    "2 m/s^2",
+    "50 m/s^2",
+    "15 m/s^2",
+    "0.5 m/s^2"
+   ],
+   "answer_key": "2 m/s^2",
+   "concept": "acceleration",
+   "id": "q3",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  },
+  {
+   "text": "What does the slope of a distance-time graph give?",
+   "options": [
+    "Acceleration",
+    "Speed",
+    "Displacement",
+    "Time"
+   ],
+   "answer_key": "Speed",
+   "concept": "graphs of motion",
+   "id": "q4",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  },
+  {
+   "text": "A horizontal line on a distance-time graph means the object is...",
+   "options": [
+    "Moving at constant speed",
+    "Accelerating",
+    "At rest",
+    "Moving backwards"
+   ],
+   "answer_key": "At rest",
+   "concept": "graphs of motion",
+   "id": "q5",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  },
+  {
+   "text": "What is the SI unit of speed?",
+   "options": [
+    "km/h",
+    "m/s",
+    "m/s^2",
+    "m"
+   ],
+   "answer_key": "m/s",
+   "concept": "units",
+   "id": "q6",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  },
+  {
+   "text": "An object moving with constant velocity has acceleration that is...",
+   "options": [
+    "Positive",
+    "Negative",
+    "Zero",
+    "Infinite"
+   ],
+   "answer_key": "Zero",
+   "concept": "acceleration",
+   "id": "q7",
+   "type": "mcq",
+   "hint": "Re-read the lesson."
+  }
+ ],
+ "answers": [
+  {
+   "question_id": "q1",
+   "answer": "Zero",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q1",
+   "answer": "The length of the track",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q1",
+   "answer": "a",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q2",
+   "answer": "Velocity",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q2",
+   "answer": "velocity",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q2",
+   "answer": "Speed",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q2",
+   "answer": "B",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q3",
+   "answer": "2 m/s^2",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q3",
+   "answer": "C",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q3",
+   "answer": "50 m/s^2",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q4",
+   "answer": "Speed",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q4",
+   "answer": "Acceleration",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q4",
+   "answer": "B",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q5",
+   "answer": "At rest",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q5",
+   "answer": "Moving at constant speed",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q6",
+   "answer": "m/s",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q6",
+   "answer": "km/h",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q7",
+   "answer": "Zero",
+   "expected": "correct"
+  },
+  {
+   "question_id": "q7",
+   "answer": "Positive",
+   "expected": "wrong"
+  },
+  {
+   "question_id": "q7",
+   "answer": "C",
+   "expected": "correct"
+  }
+ ]
+}

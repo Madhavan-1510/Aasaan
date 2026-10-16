@@ -1,0 +1,184 @@
+{
+ "lessons": [
+  {
+   "page": 1,
+   "flaw": null,
+   "steps": [
+    "An object is in motion if its position changes with time with respect to a reference point.",
+    "A passenger sitting in a moving bus is at rest with respect to the bus but in motion with respect to a tree outside.",
+    "Think: is the passenger moving or at rest?"
+   ]
+  },
+  {
+   "page": 1,
+   "flaw": "says distance is a vector",
+   "steps": [
+    "Distance is the total length of the path travelled, and it is a vector quantity.",
+    "Displacement is the shortest straight line from start to end, with a direction.",
+    "Think: what is the displacement after one full lap?"
+   ]
+  },
+  {
+   "page": 1,
+   "flaw": "says displacement after a full lap equals the track length",
+   "steps": [
+    "If a runner completes one full lap of a circular track, the displacement is the length of the track.",
+    "Distance is the total length of the path travelled.",
+    "Think: where does the runner end up?"
+   ]
+  },
+  {
+   "page": 1,
+   "flaw": null,
+   "steps": [
+    "Distance is the total length of the path travelled and is a scalar quantity.",
+    "Displacement is the shortest straight line from the starting point to the final point, with a direction.",
+    "Think: which of the two can be zero after a full lap?"
+   ]
+  },
+  {
+   "page": 2,
+   "flaw": null,
+   "steps": [
+    "Speed is the distance travelled in one unit of time. Its SI unit is metre per second.",
+    "Average speed is total distance divided by total time taken.",
+    "Think: how would you find the average speed of a trip?"
+   ]
+  },
+  {
+   "page": 2,
+   "flaw": "says speed has direction",
+   "steps": [
+    "Speed is distance per unit time and it has both magnitude and direction.",
+    "Velocity is displacement per unit time.",
+    "Think: which one needs a direction?"
+   ]
+  },
+  {
+   "page": 2,
+   "flaw": "wrong SI unit for speed",
+   "steps": [
+    "Speed is distance per unit time, and its SI unit is kilometre per hour.",
+    "Average speed is total distance divided by total time.",
+    "Think: what unit would you use in a lab?"
+   ]
+  },
+  {
+   "page": 2,
+   "flaw": "says two cars with equal speed must have equal velocity",
+   "steps": [
+    "Two cars with the same speed always have the same velocity.",
+    "Velocity is displacement per unit time and has direction.",
+    "Think: what if they drive in opposite directions?"
+   ]
+  },
+  {
+   "page": 2,
+   "flaw": null,
+   "steps": [
+    "Velocity is displacement in one unit of time, so it has magnitude and direction.",
+    "A car moving at 60 km/h towards the north has a velocity of 60 km/h north.",
+    "Think: how is this different from speed?"
+   ]
+  },
+  {
+   "page": 3,
+   "flaw": null,
+   "steps": [
+    "Acceleration is the rate of change of velocity with time, measured in metre per second squared.",
+    "If velocity increases by 10 m/s in 5 s, the acceleration is 2 m/s^2.",
+    "Think: what if the velocity does not change?"
+   ]
+  },
+  {
+   "page": 3,
+   "flaw": "wrong acceleration arithmetic",
+   "steps": [
+    "Acceleration is the change in velocity divided by the time taken.",
+    "If velocity increases by 10 m/s in 5 s, the acceleration is 50 m/s^2.",
+    "Think: divide or multiply?"
+   ]
+  },
+  {
+   "page": 3,
+   "flaw": "constant velocity has non-zero acceleration",
+   "steps": [
+    "Acceleration is the rate of change of velocity with time.",
+    "An object moving with a constant velocity has a large constant acceleration.",
+    "Think: does the velocity change here?"
+   ]
+  },
+  {
+   "page": 3,
+   "flaw": null,
+   "steps": [
+    "When the velocity of an object decreases with time, the acceleration is negative and is called retardation.",
+    "An object moving with constant velocity has zero acceleration.",
+    "Think: can an object slow down and still have acceleration?"
+   ]
+  },
+  {
+   "page": 3,
+   "flaw": null,
+   "steps": [
+    "Acceleration is the rate of change of velocity with time.",
+    "The SI unit of acceleration is metre per second squared (m/s^2).",
+    "Think: how is this unit different from the unit of speed?"
+   ]
+  },
+  {
+   "page": 4,
+   "flaw": null,
+   "steps": [
+    "In a distance-time graph, time is on the horizontal axis and distance on the vertical axis.",
+    "The slope of a distance-time graph gives the speed of the object.",
+    "Think: what does a steeper line mean?"
+   ]
+  },
+  {
+   "page": 4,
+   "flaw": "horizontal line means constant speed",
+   "steps": [
+    "The slope of a distance-time graph gives the speed.",
+    "A horizontal line in a distance-time graph shows that the object moves at constant speed.",
+    "Think: what is the slope of a horizontal line?"
+   ]
+  },
+  {
+   "page": 4,
+   "flaw": "area under v-t graph is acceleration",
+   "steps": [
+    "In a velocity-time graph, a line parallel to the time axis shows constant velocity.",
+    "The area under a velocity-time graph gives the acceleration of the object.",
+    "Think: what has units of metres?"
+   ]
+  },
+  {
+   "page": 4,
+   "flaw": "slope of distance-time graph is acceleration",
+   "steps": [
+    "In a distance-time graph, a straight line sloping upwards shows constant speed.",
+    "The slope of a distance-time graph gives the acceleration of the object.",
+    "Think: what is distance divided by time?"
+   ]
+  },
+  {
+   "page": 4,
+   "flaw": null,
+   "steps": [
+    "In a velocity-time graph, a straight line sloping upwards shows uniform acceleration.",
+    "The area under a velocity-time graph gives the displacement of the object.",
+    "Think: what does a line parallel to the time axis show?"
+   ]
+  },
+  {
+   "page": 2,
+   "flaw": null,
+   "steps": [
+    "Speed is a scalar quantity because it has magnitude only.",
+    "Velocity is a vector quantity because it has direction as well.",
+    "Think: which of these two changes when a car turns a corner at steady speed?"
+   ]
+  }
+ ]
+}
