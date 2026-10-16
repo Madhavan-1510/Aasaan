@@ -3,7 +3,34 @@
 What has been built so far, phase by phase, and what every file does. Updated after each piece of work.
 Spec sources: `PRD.md`, `agents/*.md`, `config/models.yaml`, `architecture/*`.
 
-## Current status (2026-10-16)
+## Aasaan rebuild (brief: notebooks, progressive generation)
+
+The product is now called **Aasaan**. The first version (below, "Phases 1 to 6") is a single learning path.
+The new brief asks for notebooks: a full course per goal with a roadmap and a graph, built progressively.
+
+| Milestone | Scope | Status |
+|---|---|---|
+| M1 | Rename, model config, real Gemini/Sarvam/Jev clients, visible fallbacks, `/api/health/models`, startup self-test | **Done** |
+| M2 | Notebook data model, Intake with URL tiers, Architect outline (8 to 20 chapters), Curator, chapter 1 fully built, Loading screen | Next |
+| M3 | Background job worker, concurrency limit, live updates (SSE), priority bump, resumable jobs, caching | |
+| M4 | Notebook UI: roadmap and graph views, chapter blocks, slides, quiz, progress | |
+| M5 | Diagnoser (Jev), Rewriter, Companion, doubts and voice on the notebook model | |
+| M6 | Docker, Compose, Caddy, `DEPLOY.md`, README, the 8 acceptance tests | |
+
+### M1 report
+- **Rename:** Aasaan in the UI title, header, env vars (`AASAAN_MODE`, `AASAAN_DB`), DB file (`aasaan.db`) and code (`Engine`). Old name removed from code. Still present: the user's planning docs (`PRD.md` body, `agents/`, architecture images) use the old concept wording; not touched.
+- **Models (`config/models.yaml`):** `gemma_small` (e4b) is gone. Gemini API models are only `gemma-4-31b-it` (planner, checker, vision) and `gemma-4-26b-a4b-it` (writer), confirmed in Google's Gemma docs. Added Sarvam `gemma4` and `sarvam-105b` (chat), Jev (decision), Sarvam speech/translate. Chains follow the brief's table. `teacher`, `companion` and `doubt` switch to their `_indic` chain (Sarvam-105B first) when the language is not English.
+- **Clients written from the official docs (not guessed):** Jev `POST /v1/systemone` (Bearer, `state`, `questions`, `jev-latest`); Sarvam chat `/v2/chat/completions`; STT `/speech-to-text` with `model` and `mode` (codemix); TTS `/text-to-speech` with `text`, `language_code`, `model`; translate `/translate` with `mayura:v1`. The earlier Sarvam client used wrong fields and was replaced.
+- **Docs vs brief:** Sarvam docs now list `saaras:v4` as current (v3 legacy) and `bulbul:v4-flash` as latest TTS. Config uses v4 first with v3 as the fallback.
+- **Jev is a decision model:** it is never in a text chain. `router.decide()` sends several typed questions in one call. Diagnoser asks: is it correct (Noul), which known misconception (Choice with an `other` option), how complete (Score). If Jev is unavailable, unsure, or answers `other`, the Gemma chain proposes the label.
+- **No silent fallback:** every retry, fallback and last resort writes an event with the error text (`events.error`) and a WARNING in the server log. Example (no keys): `architect step0 gemma_31b fallback GEMINI_API_KEY is not set`.
+- **Self test:** `GET /api/health/models` calls each model once (cached 60 s, `?refresh=true` forces) and returns `ok` or `failed` plus the error. In live mode it also runs at startup and logs one line per model. `GET /health` is the plain liveness check. Verified with no keys: all keyed models report `failed` with the variable name.
+- **JSON output:** Gemini calls ask for `responseMimeType: application/json`. Google's docs do not confirm this for Gemma, so a 400 about it is logged and the call is retried once without it.
+- **Tests:** 49 pass offline (provider request shapes with a recorded `httpx.post`, Jev decisions, fallback reasons, self test, config sanity).
+- **Not verified against live services (no keys yet):** Gemma JSON mode and vision on the Gemini API, Sarvam TTS speaker default (`providers.sarvam.tts_speaker` in config if the health check fails), Sarvam chat image input (undocumented, so refused), Sarvam browser-recorded audio format (STT wants WAV/MP3/AAC/FLAC/OGG, under 30 s), Jev behaviour.
+- **Missing input:** `aasaan-models-keys-deploy.md` was not provided; the brief's tables and the live docs were used instead.
+
+## Current status of the first version (2026-10-16)
 
 - Phases 1 to 4 (skeleton, core pipeline, adaptive loop, UI), the code for phase 5 (voice) and the tooling for phase 6 (eval, demo cache, preflight, runbook) are built.
 - **31 automated tests pass, all offline.** Nothing has talked to a real model yet.
