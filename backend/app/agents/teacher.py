@@ -74,4 +74,4 @@ def run(
     prompt = build_prompt(job, example, {"node": ctx["node"], "chunks": chunks, "grade": profile.grade,
                                          "critic_issues": issues or [], "previous_draft": previous})
     return router.call("teacher", prompt, ctx, validate, last_resort=cached_lesson,
-                       summary=f"Lesson for {node.id}" + (" (revision)" if issues else ""))
+                       summary=f"Lesson for {node.id}" + (" (revision)" if issues else ""), language=profile.language)

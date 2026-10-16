@@ -32,5 +32,5 @@ class Voice:
             if m["provider"] == "sarvam":
                 return self.router.sarvam.translate(m["id"], text, source, target)
             prompt = f"Translate from {source} to {target}. Reply with only the translation.\n\n{text}"
-            return self.router.providers[m["provider"]].generate(m["id"], prompt, role="translate").strip()
+            return self.router.providers[m["provider"]].generate(m["id"], prompt, role="translate", json_mode=False).strip()
         return self.router.service("translate", run)

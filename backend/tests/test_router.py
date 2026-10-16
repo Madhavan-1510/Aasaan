@@ -13,29 +13,29 @@ def v(raw):
 def test_primary_used_and_event_logged(router, store):
     router.mock.script("critic", [{"ok": 1}])
     res = router.call("critic", "p", {}, v)
-    assert res.model_used == "gemma_big" and res.fallback_step == 0
+    assert res.model_used == "gemma_31b" and res.fallback_step == 0
     ev = store.events()[0]
     assert ev["status"] == "ok" and ev["agent"] == "critic"
 
 
 def test_killed_primary_falls_back(router):
-    router.kill("gemma_big")
+    router.kill("gemma_31b")
     router.mock.script("critic", [{"ok": 1}])
     res = router.call("critic", "p", {}, v)
-    assert res.model_used == "gemma_small" and res.fallback_step == 1
+    assert res.model_used == "gemma_26b" and res.fallback_step == 1
 
 
 def test_invalid_json_gets_one_repair_retry_on_same_model(router):
     router.mock.script("critic", ["not json at all", {"ok": 1}])
     res = router.call("critic", "p", {}, v)
-    assert res.model_used == "gemma_big"
-    assert [m for _, m in router.mock.calls] == ["gemma-4-26b-a4b-it"] * 2
+    assert res.model_used == "gemma_31b"
+    assert [m for _, m in router.mock.calls] == ["gemma-4-31b-it"] * 2
 
 
 def test_persistent_invalid_output_moves_to_next_model(router):
     router.mock.script("critic", [{"bad": 1}, {"bad": 1}, {"ok": 1}])
     res = router.call("critic", "p", {}, v)
-    assert res.model_used == "gemma_small"
+    assert res.model_used == "gemma_26b"
 
 
 def test_provider_errors_exhaust_to_last_resort(router, store):
@@ -46,8 +46,8 @@ def test_provider_errors_exhaust_to_last_resort(router, store):
 
 
 def test_all_failed_without_last_resort(router, store):
-    router.kill("gemma_big")
-    router.kill("gemma_small")
+    for m in router.cfg["models"]:
+        router.kill(m)
     with pytest.raises(AllFailed):
         router.call("critic", "p", {}, v)
     assert store.events()[0]["status"] == "failed"

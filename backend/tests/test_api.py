@@ -15,5 +15,5 @@ def test_api_roundtrip(sample_text, tmp_path):
                                     "question_id": q["id"], "answer": q["options"][-1]}).json()
     assert r["result"] == "wrong"
     assert c.get("/api/events").json()
-    assert c.post("/api/admin/kill", json={"model": "gemma_big"}).json()["killed"] == ["gemma_big"]
+    assert c.post("/api/admin/kill", json={"model": "gemma_31b"}).json()["killed"] == ["gemma_31b"]
     assert c.post("/api/start", data={"learner_id": lid}).status_code == 400  # nothing uploaded

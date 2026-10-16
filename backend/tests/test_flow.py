@@ -66,10 +66,10 @@ def test_correct_answer_needs_no_model_and_no_rewrite(engine, sample_text):
 
 
 def test_whole_flow_survives_dead_primary_and_total_model_outage(engine, sample_text):
-    engine.router.kill("gemma_big")
-    lid, out = start(engine, sample_text)  # served by gemma_small
-    engine.router.kill("gemma_small")
-    engine.router.kill("jev_fast")  # every model dead: only code-based last resorts remain
+    engine.router.kill("gemma_31b")
+    lid, out = start(engine, sample_text)  # intake/architect served by gemma_26b
+    for m in engine.router.cfg["models"]:
+        engine.router.kill(m)  # every model dead: only code-based last resorts remain
     pid, nid, sid = out["path"]["path_id"], out["path"]["current"], out["session_id"]
     les = engine.lesson(lid, pid, nid)
     assert les["lesson"]["steps"]

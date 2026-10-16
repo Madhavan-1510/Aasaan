@@ -62,7 +62,7 @@ def main() -> int:
           f'("{s2["message"][:60]}")')
 
     # fallback demo: kill the primary and run one more node
-    c.post("/api/admin/kill", json={"model": "gemma_big"})
+    c.post("/api/admin/kill", json={"model": "gemma_31b"})
     nxt = fin["next_node"]
     try:
         les2 = c.post("/api/lesson", json={"learner_id": lid, "path_id": pid, "node_id": nxt}).json()

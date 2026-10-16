@@ -115,8 +115,8 @@ def m_source_refs(engine: Engine) -> tuple[str, bool, str]:
 
 def m_fallback(mode: str) -> tuple[str, bool, str]:
     results = {}
-    for label, kills in [("primary dead", ["gemma_big"]),
-                         ("all models dead", ["gemma_big", "gemma_small", "jev_fast"])]:
+    for label, kills in [("primary dead", ["gemma_31b"]),
+                         ("all models dead", list(fresh(mode)[1].cfg["models"]))]:
         _, router, engine = fresh(mode)
         for k in kills:
             router.kill(k)

@@ -41,4 +41,4 @@ def run(router: ModelRouter, question: str, chunks: list[dict], profile: Learner
         "if the material does not cover it, say so. Give a hint before a full answer when it is a homework-style "
         f"question. Write the answer in {lang_name(profile.language)}.",
         example, {"question": question, "source_chunks": chunks, "grade": profile.grade})
-    return router.call("doubt", prompt, ctx, validate, last_resort=template_answer, summary="Answer doubt")
+    return router.call("doubt", prompt, ctx, validate, last_resort=template_answer, summary="Answer doubt", language=profile.language)

@@ -6,7 +6,10 @@ Mode: AASAAN_MODE=mock (offline, no keys) or live (needs GEMINI_API_KEY). Defaul
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -67,15 +70,23 @@ class KillIn(BaseModel):
     model: Optional[str] = None  # None on revive = revive all
 
 
-def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> FastAPI:
+def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_test_on_start: Optional[bool] = None) -> FastAPI:
     load_env()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = Store(db_path or os.environ.get("AASAAN_DB", str(ROOT / "data" / "aasaan.db")))
     router = ModelRouter(store=store, mode=mode)
     demo_cache = ROOT / "data" / "demo_cache.json"  # pre-warmed lessons/quizzes (scripts/warm_cache.py)
     if demo_cache.exists():
         store.cache_load(json.loads(demo_cache.read_text(encoding="utf-8")))
     engine = Engine(store, router)
-    app = FastAPI(title="Aasaan")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        # Live mode: test every model at startup so a wrong id or key is loud, not a silent fallback.
+        if self_test_on_start if self_test_on_start is not None else router.mode == "live":
+            threading.Thread(target=router.log_self_test, name="aasaan-self-test", daemon=True).start()
+        yield
+
+    app = FastAPI(title="Aasaan", lifespan=lifespan)
     app.state.engine, app.state.router, app.state.store = engine, router, store
 
     @app.middleware("http")
@@ -91,8 +102,14 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> Fas
 
     # ---- endpoints
     @app.get("/api/health")
+    @app.get("/health")
     def health():
         return {"ok": True, "mode": router.mode, "killed": sorted(router.killed)}
+
+    @app.get("/api/health/models")
+    def health_models(refresh: bool = False):
+        """Calls every configured model once; ok / failed (with the error) per model. Cached for 60 s."""
+        return router.self_test(force=refresh)
 
     @app.post("/api/learners")
     def create_learner(body: LearnerIn):
@@ -179,6 +196,7 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> Fas
     def revive(body: KillIn):
         router.revive(body.model)
         return {"killed": sorted(router.killed)}
+
 
     # ---- frontend
     if FRONTEND.exists():

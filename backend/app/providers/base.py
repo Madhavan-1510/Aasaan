@@ -5,11 +5,11 @@ from typing import Any, Optional
 
 
 class ProviderError(Exception):
-    """Timeout, rate limit, network or server failure. Router moves on after retries."""
+    """Timeout, rate limit, network or server failure. Router retries, then moves on."""
 
 
 class ProviderNotConfigured(ProviderError):
-    """Missing key or unknown API. Never retried; router moves to the next step."""
+    """Missing key or unsupported call. Never retried; router moves to the next step."""
 
 
 class Provider:
@@ -24,5 +24,6 @@ class Provider:
         context: Optional[dict[str, Any]] = None,
         images: Optional[list[tuple[str, bytes]]] = None,  # (mime, bytes)
         timeout_s: float = 30,
+        json_mode: bool = True,
     ) -> str:
         raise NotImplementedError

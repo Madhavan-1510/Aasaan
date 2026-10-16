@@ -59,4 +59,4 @@ def run(
                                          "valid_node_ids": valid_nodes, "suggested_next": suggested_next,
                                          "returning_student": returning})
     return router.call("companion", prompt, ctx, validate, last_resort=template_message,
-                       summary=f"Companion {mode}")
+                       summary=f"Companion {mode}", language=profile.language)

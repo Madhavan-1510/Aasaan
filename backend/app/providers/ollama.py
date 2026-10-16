@@ -14,8 +14,10 @@ class OllamaProvider(Provider):
     def __init__(self, base_url: str = "http://localhost:11434"):
         self.base_url = base_url.rstrip("/")
 
-    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30):
-        body = {"model": model_id, "prompt": prompt, "stream": False, "format": "json"}
+    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True):
+        body = {"model": model_id, "prompt": prompt, "stream": False}
+        if json_mode:
+            body["format"] = "json"
         if images:
             body["images"] = [base64.b64encode(d).decode() for _, d in images]
         try:

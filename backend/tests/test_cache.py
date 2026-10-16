@@ -29,7 +29,7 @@ def test_cached_lesson_served_on_fresh_upload_when_all_models_dead(sample_text):
     s2.cache_load(dump)
     r2 = ModelRouter(store=s2, mode="mock")
     sw2 = Engine(s2, r2)
-    for m in ("gemma_big", "gemma_small", "jev_fast"):
+    for m in r2.cfg["models"]:
         r2.kill(m)
     lid2 = sw2.create_learner(9, "en", None)
     out2 = sw2.start(lid2, None, sample_text, None, None, "en", None)

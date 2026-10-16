@@ -1,16 +1,21 @@
-# Model router config. Agents ask for a role; the router walks the chain in order.
-# All model ids are PLACEHOLDERS. Confirm exact ids in the provider console before use.
-# Failure = timeout, rate limit, malformed output, or failed schema/rule check.
+# Aasaan model router config. Agents ask for a ROLE; the router walks the chain in order.
+# Policy: writers use the fast model, planners and checkers use the strongest, the Critic is a
+# different model from the Teacher where possible.
+# Failure = timeout, rate limit, malformed output, failed schema/rule check, missing key.
+# Every fallback is logged with its reason (events table + server log). GET /api/health/models
+# calls each model once so a wrong id is visible immediately instead of silently falling back.
 
 providers:
-  gemini_api:        # Gemma 4 via Google AI Studio / Gemini API key
+  gemini_api:                 # Gemma 4 via Google AI Studio. ONLY gemma-4-26b-a4b-it and gemma-4-31b-it are served here.
     api_key_env: GEMINI_API_KEY
-  ollama:            # Local Gemma 4 (optional offline mode)
-    base_url: http://localhost:11434
-  jev:               # Optional, only if hackathon access is available
-    api_key_env: JEV_API_KEY
-  sarvam:            # Indic speech and translation
+  sarvam:                     # https://api.sarvam.ai (chat /v2/chat/completions, speech, translate)
     api_key_env: SARVAM_API_KEY
+    tts_speaker: ""           # optional Bulbul speaker name; empty = API default (set if TTS health check fails)
+  typesafe:                   # Jev: a DECISION model (typed answers), not a chat model
+    api_key_env: TYPESAFE_API_KEY
+    base_url: https://api.typesafe.ai
+  ollama:                     # optional offline mode only (small Gemma sizes are local-only)
+    base_url: http://localhost:11434
 
 defaults:
   timeout_s: 30
@@ -18,32 +23,39 @@ defaults:
   log_events: true
 
 models:
-  gemma_big:   { provider: gemini_api, id: gemma-4-26b-a4b-it }   # TODO verify id
-  gemma_small: { provider: gemini_api, id: gemma-4-e4b-it }       # TODO verify id
-  gemma_local: { provider: ollama,     id: gemma4:e4b }           # TODO verify tag
-  jev_fast:    { provider: jev,        id: TODO }
-  sarvam_stt:  { provider: sarvam,     id: TODO }
-  sarvam_tts:  { provider: sarvam,     id: TODO }
-  sarvam_tr:   { provider: sarvam,     id: TODO }
+  gemma_31b:     { provider: gemini_api, kind: chat, id: gemma-4-31b-it }        # strongest: planning, checking, vision
+  gemma_26b:     { provider: gemini_api, kind: chat, id: gemma-4-26b-a4b-it }    # fast: bulk writing
+  sarvam_gemma4: { provider: sarvam,     kind: chat, id: gemma4 }                # Gemma 4 31B on Sarvam (beta), image capable
+  sarvam_105b:   { provider: sarvam,     kind: chat, id: sarvam-105b }           # Indian-language reasoning
+  jev:           { provider: typesafe,   kind: decision, id: jev-latest }
+  sarvam_stt:    { provider: sarvam,     kind: stt,       id: "saaras:v4" }      # docs: current default
+  sarvam_stt_v3: { provider: sarvam,     kind: stt,       id: "saaras:v3" }      # legacy, still available
+  sarvam_tts:    { provider: sarvam,     kind: tts,       id: "bulbul:v4-flash" }  # docs: latest
+  sarvam_tts_v3: { provider: sarvam,     kind: tts,       id: "bulbul:v3" }
+  sarvam_tr:     { provider: sarvam,     kind: translate, id: "mayura:v1" }
+  gemma_local:   { provider: ollama,     kind: chat, id: "gemma4:e4b", optional: true }   # offline mode only
 
 roles:
-  intake:     { chain: [gemma_big, gemma_small, text_only],       timeout_s: 45 }
-  architect:  { chain: [gemma_big, gemma_small, linear_path] }
-  teacher:    { chain: [gemma_big, gemma_small, cached_lesson] }
-  critic:     { chain: [gemma_big, gemma_small, rule_checks] }
-  quizzer:    { chain: [gemma_small, gemma_big, cached_questions] }
-  diagnoser:  { chain: [jev_fast, gemma_small, exact_match],      timeout_s: 10 }
-  rewriter:   { chain: [gemma_small, gemma_big, insert_review_step] }
-  companion:  { chain: [gemma_small, gemma_big, template_message] }
-  # Extension (not one of the 8 agents): grounded answers to a student's spoken/typed doubt (F9).
-  doubt:      { chain: [gemma_small, gemma_big, template_answer] }
+  intake:        { chain: [gemma_31b, gemma_26b, sarvam_gemma4, text_only], timeout_s: 60 }
+  architect:     { chain: [gemma_31b, gemma_26b, sarvam_gemma4, linear_path], timeout_s: 60 }
+  curator:       { chain: [jev, gemma_26b, search_order], timeout_s: 20 }
+  teacher:       { chain: [gemma_26b, gemma_31b, sarvam_gemma4, cached_lesson] }
+  teacher_indic: { chain: [sarvam_105b, gemma_31b, cached_lesson] }
+  critic:        { chain: [gemma_31b, gemma_26b, sarvam_gemma4, rule_checks] }
+  quizzer:       { chain: [gemma_26b, gemma_31b, cached_questions] }
+  diagnoser:     { chain: [jev, gemma_26b, exact_match], timeout_s: 10 }
+  rewriter:      { chain: [gemma_26b, gemma_31b, insert_review_step] }
+  companion:     { chain: [gemma_26b, gemma_31b, template_message] }
+  companion_indic: { chain: [sarvam_105b, gemma_31b, template_message] }
+  doubt:         { chain: [gemma_26b, gemma_31b, template_answer] }
+  doubt_indic:   { chain: [sarvam_105b, gemma_31b, template_answer] }
+  # "<role>_indic" is used automatically when the student's language is not English.
 
 services:
-  speech_to_text: { chain: [sarvam_stt, text_only_mode] }
-  text_to_speech: { chain: [sarvam_tts, no_audio] }
-  translate:      { chain: [sarvam_tr, gemma_small] }
+  speech_to_text: { chain: [sarvam_stt, sarvam_stt_v3, text_only_mode] }
+  text_to_speech: { chain: [sarvam_tts, sarvam_tts_v3, no_audio] }
+  translate:      { chain: [sarvam_tr, gemma_26b] }
 
 # Non-model steps referenced in chains (implemented in code, never call a model):
-#   text_only, linear_path, cached_lesson, rule_checks, cached_questions,
-#   exact_match, insert_review_step, template_message, text_only_mode, no_audio,
-#   template_answer
+#   text_only, linear_path, cached_lesson, rule_checks, cached_questions, exact_match,
+#   insert_review_step, template_message, text_only_mode, no_audio, template_answer, search_order

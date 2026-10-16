@@ -5,6 +5,9 @@ answer is wrong (misconception label + hint), so grading never depends on it.
 """
 from __future__ import annotations
 
+from typing import Optional
+
+from ..providers.typesafe import choice, noul, score
 from ..router import ModelRouter, RouterResult
 from ..schemas import DiagnoserOut, Question, resolve_key
 from .common import build_prompt
@@ -24,11 +27,44 @@ def is_correct(q: Question, student_answer: str) -> bool:
     return False
 
 
+def _jev_diagnose(router: ModelRouter, q: Question, student_answer: str, known_labels: list[str]) -> Optional[DiagnoserOut]:
+    """One Jev call with three typed questions (correct? / which known misconception? / how complete?).
+    Returns None when Jev is unavailable, unsure, or the mistake is not in the known labels: the Gemma chain
+    then proposes a new label. Jev returns typed answers only, so the hint comes from the Quizzer's question."""
+    if not known_labels:
+        return None
+    options = {lab: lab for lab in known_labels[:20]}
+    options["other"] = "A mistake that is not in the list"
+    state = {"question": q.text, "options": q.options, "correct_answer": resolve_key(q), "concept": q.concept,
+             "student_answer": student_answer}
+    answers = router.decide("diagnoser", state, {
+        "correct": noul("Is the student's answer correct for this question?"),
+        "misconception": choice("Which misconception best explains the student's wrong answer?", options),
+        "completeness": score("How complete is the student's understanding shown by the answer?",
+                              ["Not at all", "Partly", "Fully"]),
+    }, summary=f"Jev diagnose {q.id}")
+    if not answers:
+        return None
+    try:
+        label = answers["misconception"]["choice"]
+        conf = float(answers["misconception"]["confidence"])
+        partial = float(answers["completeness"]["score"]) >= 1.5
+    except (KeyError, TypeError, ValueError):
+        return None
+    if label == "other" or label not in known_labels:
+        return None
+    return DiagnoserOut(question_id=q.id, result="partial" if partial else "wrong", misconception=label,
+                        confidence=max(0.0, min(1.0, conf)), hint=q.hint)
+
+
 def run(router: ModelRouter, q: Question, student_answer: str, known_labels: list[str]) -> RouterResult:
     if is_correct(q, student_answer):
         # Code-graded; no model call needed.
         out = DiagnoserOut(question_id=q.id, result="correct", misconception=None, confidence=1.0, hint="")
         return RouterResult(out, "code", 0)
+    jev = _jev_diagnose(router, q, student_answer, known_labels)
+    if jev:
+        return RouterResult(jev, "jev", 0)
 
     ctx = {"question": q.model_dump(), "student_answer": student_answer, "known_labels": known_labels}
 

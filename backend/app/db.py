@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS sessions(
   id TEXT PRIMARY KEY, learner_id TEXT, started REAL, ended REAL, summary TEXT);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, ts TEXT, agent TEXT, model_used TEXT,
-  fallback_step INTEGER, status TEXT, latency_ms INTEGER, validation TEXT, summary TEXT);
+  fallback_step INTEGER, status TEXT, latency_ms INTEGER, validation TEXT, summary TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -54,6 +54,11 @@ class Store:
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        try:  # migrate databases created before the error column existed
+            self.conn.execute("ALTER TABLE events ADD COLUMN error TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     # -- low level -----------------------------------------------------------
     def _run(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -215,10 +220,10 @@ class Store:
     # -- events (F12) --------------------------------------------------------
     def log_event(self, e: dict) -> None:
         self._run(
-            """INSERT INTO events(run_id,ts,agent,model_used,fallback_step,status,latency_ms,validation,summary)
-               VALUES(?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO events(run_id,ts,agent,model_used,fallback_step,status,latency_ms,validation,summary,error)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (e["run_id"], e["ts"], e["agent"], e["model_used"], e["fallback_step"], e["status"],
-             e["latency_ms"], e["validation"], e["summary"]),
+             e["latency_ms"], e["validation"], e["summary"], e.get("error", "")),
         )
 
     def events(self, limit: int = 200) -> list[dict]:
