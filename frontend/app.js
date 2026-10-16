@@ -1,4 +1,4 @@
-// Swarm Tutor UI. Chat-first home -> course page -> lesson -> quiz -> recap. No agent names are ever shown.
+// Aasaan UI. Chat-first home -> course page -> lesson -> quiz -> recap. No agent names are ever shown.
 const $app = document.getElementById("app");
 const $bar = document.getElementById("bar");
 const S = { learner: null, session: null, path: null, node: null, lesson: null, quiz: null, qi: 0, step: 0, file: null, note: "" };
@@ -36,7 +36,7 @@ function cover(title) {  // deterministic gradient per course title
 function topbar(back) {
   $bar.innerHTML = `<div class="bar">
     ${back ? `<button class="linkbtn" id="back">← ${esc(back.label)}</button>` : `<span></span>`}
-    <button class="brand" id="home">${ICON.logo}Swarm Tutor</button><span></span></div>`;
+    <button class="brand" id="home">${ICON.logo}Aasaan</button><span></span></div>`;
   document.getElementById("home").onclick = () => { location.hash = ""; home(); };
   if (back) document.getElementById("back").onclick = back.fn;
 }

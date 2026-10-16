@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.db import Store  # noqa: E402
 from app.main import load_env  # noqa: E402
-from app.orchestrator import Swarm  # noqa: E402
+from app.orchestrator import Engine  # noqa: E402
 from app.router import ModelRouter  # noqa: E402
 
 OUT = ROOT / "data" / "demo_cache.json"
@@ -37,15 +37,15 @@ def main() -> int:
     if router.mode == "mock" and not args.allow_mock:
         print("Refusing to build a demo cache from mock output. Add keys and use --mode live (or --allow-mock).")
         return 2
-    swarm = Swarm(store, router)
+    engine = Engine(store, router)
     text = Path(args.chapter).read_text(encoding="utf-8")
-    lid = swarm.create_learner(9, args.language, None)
-    out = swarm.start(lid, None, text, None, None, args.language, None)
+    lid = engine.create_learner(9, args.language, None)
+    out = engine.start(lid, None, text, None, None, args.language, None)
     pid = out["path"]["path_id"]
     unverified = []
     for n in out["path"]["nodes"]:
-        les = swarm.lesson(lid, pid, n["id"])
-        swarm.quiz(lid, pid, n["id"])
+        les = engine.lesson(lid, pid, n["id"])
+        engine.quiz(lid, pid, n["id"])
         status = "verified" if les["verified"] else "UNVERIFIED (not cached)"
         print(f"{n['id']}: {n['title'][:50]:50} {status}")
         if not les["verified"]:

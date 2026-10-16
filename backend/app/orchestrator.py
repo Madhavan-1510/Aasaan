@@ -26,7 +26,7 @@ class UserError(Exception):
     """Bad request or missing data; surfaced as HTTP 400/404."""
 
 
-class Swarm:
+class Engine:
     def __init__(self, store: Store, router: ModelRouter):
         self.store = store
         self.router = router

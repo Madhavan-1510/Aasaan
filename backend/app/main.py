@@ -1,7 +1,7 @@
 """FastAPI app: JSON API for the five-screen UI + static frontend.
 
 Run from the repo root:  python -m uvicorn app.main:create_app --factory --app-dir backend --reload
-Mode: SWARM_MODE=mock (offline, no keys) or live (needs GEMINI_API_KEY). Default: live if a key is set.
+Mode: AASAAN_MODE=mock (offline, no keys) or live (needs GEMINI_API_KEY). Default: live if a key is set.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .db import Store
-from .orchestrator import Swarm, UserError
+from .orchestrator import Engine, UserError
 from .router import ModelRouter
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,14 +69,14 @@ class KillIn(BaseModel):
 
 def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> FastAPI:
     load_env()
-    store = Store(db_path or os.environ.get("SWARM_DB", str(ROOT / "data" / "swarm.db")))
+    store = Store(db_path or os.environ.get("AASAAN_DB", str(ROOT / "data" / "aasaan.db")))
     router = ModelRouter(store=store, mode=mode)
     demo_cache = ROOT / "data" / "demo_cache.json"  # pre-warmed lessons/quizzes (scripts/warm_cache.py)
     if demo_cache.exists():
         store.cache_load(json.loads(demo_cache.read_text(encoding="utf-8")))
-    swarm = Swarm(store, router)
-    app = FastAPI(title="Swarm Tutor")
-    app.state.swarm, app.state.router, app.state.store = swarm, router, store
+    engine = Engine(store, router)
+    app = FastAPI(title="Aasaan")
+    app.state.engine, app.state.router, app.state.store = engine, router, store
 
     @app.middleware("http")
     async def no_cache_ui(request, call_next):  # always serve the latest UI files during development
@@ -96,11 +96,11 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> Fas
 
     @app.post("/api/learners")
     def create_learner(body: LearnerIn):
-        return {"learner_id": swarm.create_learner(body.grade, body.language, body.goal)}
+        return {"learner_id": engine.create_learner(body.grade, body.language, body.goal)}
 
     @app.post("/api/session/open")
     def session_open(body: SessionIn):
-        return swarm.open_session(body.learner_id)
+        return engine.open_session(body.learner_id)
 
     @app.post("/api/start")
     async def start(
@@ -121,36 +121,36 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> Fas
                 images = [(ctype, data)]
             else:
                 raise HTTPException(400, "Upload a photo, a PDF, or paste text.")
-        return swarm.start(learner_id, session_id, text, pdf, images, language, goal)
+        return engine.start(learner_id, session_id, text, pdf, images, language, goal)
 
     @app.get("/api/courses")
     def courses(learner_id: str):
-        return swarm.list_courses(learner_id)
+        return engine.list_courses(learner_id)
 
     @app.get("/api/path/{path_id}")
     def get_path(path_id: str):
-        return swarm.get_path(path_id)
+        return engine.get_path(path_id)
 
     @app.post("/api/lesson")
     def lesson(body: NodeIn):
-        return swarm.lesson(body.learner_id, body.path_id, body.node_id)
+        return engine.lesson(body.learner_id, body.path_id, body.node_id)
 
     @app.post("/api/quiz")
     def quiz(body: NodeIn):
-        return swarm.quiz(body.learner_id, body.path_id, body.node_id)
+        return engine.quiz(body.learner_id, body.path_id, body.node_id)
 
     @app.post("/api/answer")
     def answer(body: AnswerIn):
-        return swarm.answer(body.learner_id, body.session_id, body.path_id, body.node_id, body.question_id,
+        return engine.answer(body.learner_id, body.session_id, body.path_id, body.node_id, body.question_id,
                             body.answer, body.attempt)
 
     @app.post("/api/finish-node")
     def finish_node(body: FinishIn):
-        return swarm.finish_node(body.learner_id, body.session_id, body.path_id, body.node_id)
+        return engine.finish_node(body.learner_id, body.session_id, body.path_id, body.node_id)
 
     @app.post("/api/session/close")
     def session_close(body: CloseIn):
-        return swarm.close_session(body.learner_id, body.session_id, body.path_id)
+        return engine.close_session(body.learner_id, body.session_id, body.path_id)
 
     @app.post("/api/doubt")
     async def doubt(
@@ -161,9 +161,9 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None) -> Fas
         audio: Optional[UploadFile] = File(None),
     ):
         data = await audio.read() if audio is not None else None
-        return swarm.doubt(learner_id, path_id, node_id, text, data)
+        return engine.doubt(learner_id, path_id, node_id, text, data)
 
-    # ---- internal / demo helpers (no UI exposure; events kept for a future swarm view)
+    # ---- internal / demo helpers (no UI exposure; events kept for a future engine view)
     @app.get("/api/events")
     def events(limit: int = 100):
         return store.events(limit)

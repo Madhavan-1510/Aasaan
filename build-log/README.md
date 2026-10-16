@@ -18,7 +18,7 @@ python -m pytest backend -q                                                  # 3
 python -m uvicorn app.main:create_app --factory --app-dir backend --port 8000   # then open http://localhost:8000
 ```
 
-Mode is chosen automatically: `live` if `GEMINI_API_KEY` is set, else `mock`. Force with `SWARM_MODE=mock|live`.
+Mode is chosen automatically: `live` if `GEMINI_API_KEY` is set, else `mock`. Force with `AASAAN_MODE=mock|live`.
 Keys go in `.env` (copy `.env.example`) at the end.
 
 ## Phases

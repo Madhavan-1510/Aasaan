@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import Store  # noqa: E402
-from app.orchestrator import Swarm  # noqa: E402
+from app.orchestrator import Engine  # noqa: E402
 from app.router import ModelRouter  # noqa: E402
 
 SAMPLE = """Motion is the change in position of an object with time. An object is at rest if its position does not change.
@@ -34,5 +34,5 @@ def router(store):
 
 
 @pytest.fixture
-def swarm(store, router):
-    return Swarm(store, router)
+def engine(store, router):
+    return Engine(store, router)

@@ -1,5 +1,5 @@
 """Offline provider: returns schema-valid JSON for every role, derived from the
-context the agent passes in. Lets the whole swarm run with no API keys (tests,
+context the agent passes in. Lets the whole engine run with no API keys (tests,
 UI development, demo cache). Also supports scripted outputs and failure
 injection so loops and fallbacks can be tested.
 """

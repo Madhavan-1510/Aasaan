@@ -1,4 +1,4 @@
-# PRD: Swarm Tutor (working title)
+# PRD: Aasaan (working title)
 
 Hacktoberfest Hack Day Bengaluru 2026 (MLH). Status: draft v0.1.
 

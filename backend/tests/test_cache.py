@@ -1,7 +1,7 @@
 """Pre-warmed demo cache: keyed by source content, so it still hits on a fresh upload."""
 from app.agents.common import fingerprint
 from app.db import Store
-from app.orchestrator import Swarm
+from app.orchestrator import Engine
 from app.router import ModelRouter
 
 
@@ -15,7 +15,7 @@ def test_fingerprint_ignores_chunk_ids():
 def test_cached_lesson_served_on_fresh_upload_when_all_models_dead(sample_text):
     # warm: approved lesson and quiz land in the cache
     s1 = Store(":memory:")
-    sw1 = Swarm(s1, ModelRouter(store=s1, mode="mock"))
+    sw1 = Engine(s1, ModelRouter(store=s1, mode="mock"))
     lid = sw1.create_learner(9, "en", None)
     out = sw1.start(lid, None, sample_text, None, None, "en", None)
     pid, nid = out["path"]["path_id"], out["path"]["current"]
@@ -28,7 +28,7 @@ def test_cached_lesson_served_on_fresh_upload_when_all_models_dead(sample_text):
     s2 = Store(":memory:")
     s2.cache_load(dump)
     r2 = ModelRouter(store=s2, mode="mock")
-    sw2 = Swarm(s2, r2)
+    sw2 = Engine(s2, r2)
     for m in ("gemma_big", "gemma_small", "jev_fast"):
         r2.kill(m)
     lid2 = sw2.create_learner(9, "en", None)

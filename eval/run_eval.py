@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.agents import critic, diagnoser, intake  # noqa: E402
 from app.db import Store  # noqa: E402
 from app.main import load_env  # noqa: E402
-from app.orchestrator import Swarm  # noqa: E402
+from app.orchestrator import Engine  # noqa: E402
 from app.router import AllFailed, ModelRouter  # noqa: E402
 from app.schemas import LearnerProfile, LessonOut, Question  # noqa: E402
 
@@ -33,26 +33,26 @@ def pct(n: int, d: int) -> float:
     return 100.0 * n / d if d else 0.0
 
 
-def fresh(mode: str | None) -> tuple[Store, ModelRouter, Swarm]:
+def fresh(mode: str | None) -> tuple[Store, ModelRouter, Engine]:
     store = Store(":memory:")
     router = ModelRouter(store=store, mode=mode)
-    return store, router, Swarm(store, router)
+    return store, router, Engine(store, router)
 
 
-def run_flow(swarm: Swarm, wrong_first: bool = True) -> dict:
+def run_flow(engine: Engine, wrong_first: bool = True) -> dict:
     """One full pass over the first node. Returns facts used by several metrics."""
-    lid = swarm.create_learner(9, "en", "exam on Friday")
-    out = swarm.start(lid, None, SAMPLE, None, None, "en", "exam on Friday")
+    lid = engine.create_learner(9, "en", "exam on Friday")
+    out = engine.start(lid, None, SAMPLE, None, None, "en", "exam on Friday")
     pid, nid, sid = out["path"]["path_id"], out["path"]["current"], out["session_id"]
-    les = swarm.lesson(lid, pid, nid)
-    swarm.quiz(lid, pid, nid)
-    quiz = swarm.store.get_quiz(pid, nid)
+    les = engine.lesson(lid, pid, nid)
+    engine.quiz(lid, pid, nid)
+    quiz = engine.store.get_quiz(pid, nid)
     n_before = len(out["path"]["nodes"])
     for i, q in enumerate(quiz["questions"]):
         ans = q["options"][-1] if (wrong_first and i == 0) else q["answer_key"]
-        swarm.answer(lid, sid, pid, nid, q["id"], ans)
-    fin = swarm.finish_node(lid, sid, pid, nid)
-    swarm.close_session(lid, sid, pid)
+        engine.answer(lid, sid, pid, nid, q["id"], ans)
+    fin = engine.finish_node(lid, sid, pid, nid)
+    engine.close_session(lid, sid, pid)
     return {"lid": lid, "pid": pid, "nid": nid, "lesson": les, "n_before": n_before,
             "n_after": len(fin["path"]["nodes"]), "patch": fin["patch"]}
 
@@ -99,15 +99,15 @@ def m_critic(router: ModelRouter, mode: str) -> tuple[str, bool | None, str]:
             "target >= 8/10 each; rule_checks cannot catch factual errors")
 
 
-def m_source_refs(swarm: Swarm) -> tuple[str, bool, str]:
-    lid = swarm.create_learner(9, "en", None)
-    out = swarm.start(lid, None, SAMPLE, None, None, "en", None)
+def m_source_refs(engine: Engine) -> tuple[str, bool, str]:
+    lid = engine.create_learner(9, "en", None)
+    out = engine.start(lid, None, SAMPLE, None, None, "en", None)
     pid = out["path"]["path_id"]
-    src = swarm.store.get_source(swarm.store.get_path(pid)["source_id"])
+    src = engine.store.get_source(engine.store.get_path(pid)["source_id"])
     known = {c["chunk_id"] for c in src["chunks"]}
     total = good = 0
     for n in out["path"]["nodes"]:
-        les = swarm.lesson(lid, pid, n["id"])["lesson"]
+        les = engine.lesson(lid, pid, n["id"])["lesson"]
         total += 1
         good += int(bool(les["source_refs"]) and all(r["chunk_id"] in known for r in les["source_refs"]))
     return f"{good}/{total} lessons", good == total, "target 100%"
@@ -117,27 +117,27 @@ def m_fallback(mode: str) -> tuple[str, bool, str]:
     results = {}
     for label, kills in [("primary dead", ["gemma_big"]),
                          ("all models dead", ["gemma_big", "gemma_small", "jev_fast"])]:
-        _, router, swarm = fresh(mode)
+        _, router, engine = fresh(mode)
         for k in kills:
             router.kill(k)
         try:
-            run_flow(swarm)
+            run_flow(engine)
             results[label] = "pass"
         except (AllFailed, Exception) as e:  # any crash is a failure of the fallback promise
             results[label] = f"FAIL ({type(e).__name__}: {e})"
     return "; ".join(f"{k}: {v}" for k, v in results.items()), all(v == "pass" for v in results.values()), "flow completes"
 
 
-def m_path_changes(swarm: Swarm) -> tuple[str, bool, str]:
-    r = run_flow(swarm, wrong_first=True)
+def m_path_changes(engine: Engine) -> tuple[str, bool, str]:
+    r = run_flow(engine, wrong_first=True)
     ok = r["n_after"] > r["n_before"]
     return f"{r['n_before']} -> {r['n_after']} nodes", ok, "path visibly changes after a wrong answer"
 
 
-def m_memory(swarm: Swarm) -> tuple[str, bool, str]:
-    r = run_flow(swarm, wrong_first=True)
-    s2 = swarm.open_session(r["lid"])
-    label = (swarm.store.mistake_labels(r["lid"]) or [None])[0]
+def m_memory(engine: Engine) -> tuple[str, bool, str]:
+    r = run_flow(engine, wrong_first=True)
+    s2 = engine.open_session(r["lid"])
+    label = (engine.store.mistake_labels(r["lid"]) or [None])[0]
     ok = bool(label) and label in s2["message"]
     return f'"{s2["message"][:70]}"', ok, "second session references an earlier mistake"
 
@@ -147,12 +147,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["mock", "live"], default=None)
     args = ap.parse_args()
-    store, router, swarm = fresh(args.mode)
+    store, router, engine = fresh(args.mode)
     mode = router.mode
     rows = [
         ("Grading agreement (20 answers)", *m_grading(router)),
         ("Critic catches seeded errors", *m_critic(router, mode)),
-        ("Lessons with valid source refs", *m_source_refs(swarm)),
+        ("Lessons with valid source refs", *m_source_refs(engine)),
         ("Fallback: kill models, flow completes", *m_fallback(mode)),
         ("Path changes after a wrong answer", *m_path_changes(fresh(mode)[2])),
         ("Second session mentions earlier mistake", *m_memory(fresh(mode)[2])),

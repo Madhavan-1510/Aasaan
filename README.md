@@ -1,4 +1,4 @@
-# Swarm Tutor: planning pack
+# Aasaan: planning pack
 
 Draft documents for the Hacktoberfest Hack Day Bengaluru 2026 build.
 

@@ -77,7 +77,7 @@ class ModelRouter:
             self.cfg = yaml.safe_load(f)
         self.store = store
         # mode: "mock" = every model step is served by the offline MockProvider.
-        self.mode = mode or os.environ.get("SWARM_MODE") or ("live" if os.environ.get("GEMINI_API_KEY") else "mock")
+        self.mode = mode or os.environ.get("AASAAN_MODE") or ("live" if os.environ.get("GEMINI_API_KEY") else "mock")
         self.killed: set[str] = set()  # model names forced to fail (demo: "kill the primary")
         self.mock = MockProvider()
         p = self.cfg.get("providers", {})
