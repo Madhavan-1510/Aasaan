@@ -10,10 +10,12 @@ Jev is a decision model, not a chat model: it is used through `decide()`, never 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -99,6 +101,9 @@ class ModelRouter:
         self.jev = TypeSafeClient(ts.get("api_key_env", "TYPESAFE_API_KEY"), ts.get("base_url", "https://api.typesafe.ai"))
         self.defaults = self.cfg.get("defaults", {})
         self._health_cache: Optional[tuple[float, dict]] = None
+        # global limit on concurrent model calls (rate limits); AASAAN_MAX_CALLS overrides the config
+        limit = int(os.environ.get("AASAAN_MAX_CALLS") or self.defaults.get("max_concurrent_calls", 4))
+        self._sem = threading.BoundedSemaphore(max(1, limit))
 
     # ------------------------------------------------------------ admin hooks
     def kill(self, model: str) -> None:
@@ -122,6 +127,20 @@ class ModelRouter:
             log.warning("[aasaan] %s step %d (%s) -> %s: %s", agent, step, model, status, error or summary)
         if self.store and self.defaults.get("log_events", True):
             self.store.log_event(ev)
+
+    def _cache_key(self, model_id: str, prompt: str, images) -> Optional[str]:
+        """Every live model call is cached by input hash, so retries and repeated runs are cheap."""
+        if self.mode != "live" or not self.store or not self.defaults.get("cache_calls", True):
+            return None
+        h = hashlib.sha256()
+        h.update(f"{model_id}\n{prompt}".encode())
+        for mime, data in images or []:
+            h.update(mime.encode() + hashlib.sha256(data).digest())
+        return "llm:" + h.hexdigest()
+
+    def note(self, agent: str, status: str, summary: str, error: str = "") -> None:
+        """Record a non-call event (for example a chapter shipped unverified) with its reason."""
+        self._event(str(uuid.uuid4()), agent, "none", 0, status, 0, "pass", summary, error)
 
     # ------------------------------------------------------------------ roles
     def role_name(self, role: str, language: Optional[str]) -> str:
@@ -160,6 +179,8 @@ class ModelRouter:
         run_id = str(uuid.uuid4())
         label = summary or role
 
+        # the first CHAT model is the primary (a leading decision model such as Jev is handled by decide())
+        primary_idx = next((i for i, st in enumerate(role_cfg["chain"]) if st not in NON_MODEL_STEPS and self._kind(st) == "chat"), 0)
         for step_idx, step in enumerate(role_cfg["chain"]):
             if step in NON_MODEL_STEPS:
                 if last_resort is None:
@@ -186,9 +207,15 @@ class ModelRouter:
             for attempt in range(max_retries + 1):
                 last_try = attempt == max_retries
                 t0 = time.perf_counter()
+                cache_key = self._cache_key(model_id, cur_prompt, images)
+                cached = self.store.cache_get(cache_key) if cache_key else None
                 try:
-                    raw = provider.generate(model_id, cur_prompt, role=role, context=context, images=images,
-                                            timeout_s=timeout)
+                    if cached is not None:
+                        raw = cached
+                    else:
+                        with self._sem:
+                            raw = provider.generate(model_id, cur_prompt, role=role, context=context, images=images,
+                                                    timeout_s=timeout)
                 except ProviderNotConfigured as e:
                     self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label, str(e))
                     break
@@ -206,8 +233,11 @@ class ModelRouter:
                     cur_prompt = (f"{prompt}\n\nYour previous reply was invalid: {str(e)[:300]}\n"
                                   "Reply again with ONLY valid JSON matching the schema.")
                     continue
-                self._event(run_id, role, step, step_idx, "ok" if step_idx == 0 else "fallback", ms, "pass", label,
-                            "" if step_idx == 0 else "served by a fallback model")
+                if cache_key and cached is None:  # cache only replies that passed validation
+                    self.store.cache_set(cache_key, raw)
+                self._event(run_id, role, step, step_idx, "ok" if step_idx == primary_idx else "fallback", ms, "pass",
+                            label + (" (cached)" if cached is not None else ""),
+                            "" if step_idx == primary_idx else "served by a fallback model")
                 return RouterResult(value, step, step_idx)
 
         self._event(run_id, role, "none", len(role_cfg["chain"]), "failed", 0, "fail", label, "all steps failed")
@@ -303,7 +333,17 @@ class ModelRouter:
         with ThreadPoolExecutor(max_workers=6) as pool:
             results = dict(pool.map(check, list(models)))
         failed = [n for n, r in results.items() if r["status"] == "failed" and not r["optional"]]
-        report = {"mode": self.mode, "ok": not failed, "failed": failed, "models": results}
+        features = {}
+        if self.mode != "mock":  # Google Search grounding with Gemma (used by the Curator for discovery)
+            t0 = time.perf_counter()
+            try:
+                hits = self.providers["gemini_api"].grounded_search(models["gemma_26b"]["id"], "Find one page about binary search", 25)
+                features["grounded_search"] = {"status": "ok" if hits else "failed", "results": len(hits),
+                                               "error": "" if hits else "no grounding results returned",
+                                               "latency_ms": int((time.perf_counter() - t0) * 1000)}
+            except Exception as e:
+                features["grounded_search"] = {"status": "failed", "error": str(e)[:300]}
+        report = {"mode": self.mode, "ok": not failed, "failed": failed, "models": results, "features": features}
         self._health_cache = (time.time(), report)
         return report
 
@@ -313,6 +353,8 @@ class ModelRouter:
         if rep["mode"] == "mock":
             log.warning("[aasaan] MOCK MODE: no real model is being called (set GEMINI_API_KEY for live mode)")
             return rep
+        for name, r in rep.get("features", {}).items():
+            (log.info if r["status"] == "ok" else log.warning)("[aasaan] feature %-14s %s %s", name, r["status"], r.get("error", ""))
         for name, r in rep["models"].items():
             if r["status"] == "ok":
                 log.info("[aasaan] model %-14s ok      %s (%d ms)", name, r["id"], r["latency_ms"])

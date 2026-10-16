@@ -5,17 +5,67 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app import web  # noqa: E402
 from app.db import Store  # noqa: E402
-from app.orchestrator import Engine  # noqa: E402
+from app.engine import Engine  # noqa: E402
 from app.router import ModelRouter  # noqa: E402
+from app.worker import Worker  # noqa: E402
 
-SAMPLE = """Motion is the change in position of an object with time. An object is at rest if its position does not change.
+SAMPLE = """Motion is the change in position of an object with time. An object is at rest if its position does not change with time with respect to a reference point.
 
-Speed is the distance travelled per unit time. Speed has only magnitude and no direction. A car covering 60 km in 1 hour has a speed of 60 km/h.
+Speed is the distance travelled per unit time. Speed has only magnitude and no direction. A car covering 60 km in 1 hour has a speed of 60 km/h. The SI unit of speed is metre per second.
 
-Velocity is speed in a given direction. Velocity has both magnitude and direction. A car moving 60 km/h towards north has a velocity of 60 km/h north.
+Velocity is speed in a given direction. Velocity has both magnitude and direction. A car moving 60 km/h towards north has a velocity of 60 km/h north. Two cars with the same speed can have different velocities if they move in different directions.
 
-Acceleration is the rate of change of velocity with time. If velocity changes by 10 m/s in 5 s the acceleration is 2 m/s squared."""
+Acceleration is the rate of change of velocity with time. If velocity changes by 10 m/s in 5 s the acceleration is 2 m/s squared. An object moving with a constant velocity has zero acceleration.
+
+In a distance-time graph, the slope gives the speed of the object. A horizontal line in a distance-time graph shows that the object is at rest. In a velocity-time graph, the area under the graph gives the displacement."""
+
+
+class FakeResp:
+    def __init__(self, status=200, text="", data=None, headers=None, url=""):
+        self.status_code, self.text, self._data, self.url = status, text, data, url
+        self.headers = {"content-type": "text/html"} if headers is None else headers
+
+    def json(self):
+        if self._data is None:
+            raise ValueError("no json")
+        return self._data
+
+
+class FakeWeb:
+    """Replaces web.http_get/http_post. Add routes: fake.get(lambda url, params: FakeResp(...) or None)."""
+
+    def __init__(self):
+        self.routes, self.calls = [], []
+
+    def get(self, pred):
+        self.routes.append(pred)
+
+    def __call__(self, url, *, headers=None, params=None, timeout=0):
+        self.calls.append((url, params))
+        for pred in reversed(self.routes):
+            r = pred(url, params or {})
+            if r is not None:
+                if not r.url:
+                    r.url = url
+                return r
+        if url.endswith("/robots.txt"):
+            return FakeResp(404, "")
+        raise RuntimeError(f"unexpected network call in test: {url}")
+
+
+@pytest.fixture(autouse=True)
+def fake_web(monkeypatch):
+    """No test touches the real network. Tests add routes to this fake when they need web results."""
+    fw = FakeWeb()
+    monkeypatch.setattr(web, "http_get", fw)
+    monkeypatch.setattr(web, "http_post", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network blocked in tests")))
+    monkeypatch.setattr(web, "_resolve", lambda host, port: [(2, 1, 6, "", ("93.184.216.34", port))])
+    web._robots.clear()
+    for k in ("YOUTUBE_API_KEY", "PEXELS_API_KEY", "JINA_API_KEY", "FIRECRAWL_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    return fw
 
 
 @pytest.fixture
@@ -34,5 +84,10 @@ def router(store):
 
 
 @pytest.fixture
-def engine(store, router):
-    return Engine(store, router)
+def engine(store, router, tmp_path):
+    return Engine(store, router, upload_dir=tmp_path / "uploads", retry_delay_s=0)
+
+
+@pytest.fixture
+def worker(engine):
+    return Worker(engine)

@@ -56,3 +56,21 @@ class GeminiProvider(Provider):
             return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
         except (KeyError, IndexError, ValueError) as e:
             raise ProviderError(f"gemini unexpected response for {model_id}: {r.text[:300]}") from e
+
+    def grounded_search(self, model_id: str, prompt: str, timeout_s: float = 30) -> list[dict]:
+        """Gemini API Google Search grounding (`tools: [{"google_search": {}}]`, shown in Google's Gemma docs).
+        Returns [{"uri", "title"}] from groundingMetadata.groundingChunks. URIs are redirect links and are
+        untrusted candidates: the caller must verify them."""
+        key = os.environ.get(self.api_key_env)
+        if not key:
+            raise ProviderNotConfigured(f"{self.api_key_env} is not set")
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
+        r = self._post(model_id, key, body, timeout_s)
+        if r.status_code != 200:
+            raise ProviderError(f"gemini grounded search HTTP {r.status_code} for {model_id}: {r.text[:300]}")
+        try:
+            meta = r.json()["candidates"][0].get("groundingMetadata", {})
+        except (KeyError, IndexError, ValueError) as e:
+            raise ProviderError(f"gemini grounded search unexpected response: {r.text[:300]}") from e
+        return [{"uri": c["web"]["uri"], "title": c["web"].get("title", "")}
+                for c in meta.get("groundingChunks", []) if c.get("web", {}).get("uri")]

@@ -1,7 +1,7 @@
-"""Shared types and per-agent output schemas (agents/README.md and agents/0X-*.md).
+"""Per-agent output schemas. Every agent reply is validated here; an invalid reply makes the router move on.
 
-Every agent output is validated here. A ValueError / ValidationError means
-"invalid output" and makes the router move to the next fallback.
+References to source material are plain strings: a chunk id like `s1a2b3-p4-c2` (the student's own material or a
+fetched page) or `url:https://...` (a verified link). Internal JSON stays in English.
 """
 from __future__ import annotations
 
@@ -9,66 +9,37 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-MAX_PATH_NODES = 8          # Architect cap (agents/02-architect.md)
-MAX_PATH_NODES_PATCHED = 10  # Rewriter must never grow the path beyond this
-MAX_INSERTS_PER_PATCH = 2
+MIN_CHAPTERS, MAX_CHAPTERS = 3, 20
+MAX_NOTES_CHARS = 7000
 MAX_MESSAGE_CHARS = 400
-MAX_LESSON_CHARS = 2500
+MAX_INSERTS_PER_SESSION = 2
+MAX_CHAPTERS_AFTER_PATCH = 24
 
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-# ---------------------------------------------------------------- shared types
-class SourceRef(Strict):
-    source_id: str
-    page: int
-    chunk_id: str
-
-
-class LearnerProfile(Strict):
-    learner_id: str
-    grade: int = 9
-    language: str = "en"
-    goal: Optional[str] = None
-    mistake_labels: list[str] = Field(default_factory=list)
-
-
-class PathNode(Strict):
-    id: str
-    title: str
-    prereqs: list[str] = Field(default_factory=list)
-    est_minutes: int = 6
-    source_refs: list[SourceRef]
-
-    @field_validator("source_refs")
-    @classmethod
-    def _has_refs(cls, v):
-        if not v:
-            raise ValueError("every node needs at least one source ref")
-        return v
-
-
-# -------------------------------------------------------------------- 01 Intake
-class Topic(Strict):
-    id: str
-    title: str
-    summary: str = ""
-    page_refs: list[int]
-
-
+# ------------------------------------------------------------------ source text
 class Chunk(Strict):
     chunk_id: str
-    page: int
+    page: int = 1
     text: str
     kind: Literal["text", "figure"] = "text"
 
 
+class TopicOut(Strict):
+    id: str
+    title: str
+    summary: str = ""
+    page_refs: list[int] = Field(default_factory=list)
+
+
 class IntakeOut(Strict):
+    """What Intake extracts from ONE source: topics plus (for photos) the transcribed chunks."""
     source_id: str
     language: str = "en"
-    topics: list[Topic]
+    topics: list[TopicOut]
     chunks: list[Chunk]
     warnings: list[str] = Field(default_factory=list)
 
@@ -87,100 +58,115 @@ class IntakeOut(Strict):
         return self
 
 
-# ------------------------------------------------------------------ 02 Architect
-class PathOut(Strict):
-    path_id: str
-    start_node: str
-    nodes: list[PathNode]
-    edges: list[tuple[str, str]] = Field(default_factory=list)
+# ------------------------------------------------------------------- Architect
+class OutlineChapter(Strict):
+    key: str
+    title: str
+    summary: str = ""
+    objectives: list[str] = Field(default_factory=list)
+    prereqs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v):
+        if not v.strip():
+            raise ValueError("chapter title is empty")
+        return v.strip()
 
 
-def check_path(path: PathOut, max_nodes: int = MAX_PATH_NODES) -> PathOut:
-    """Code-side validation: size, ids, prereqs exist, acyclic, start exists."""
-    if not path.nodes:
-        raise ValueError("path has no nodes")
-    if len(path.nodes) > max_nodes:
-        raise ValueError(f"path has {len(path.nodes)} nodes, max {max_nodes}")
-    ids = [n.id for n in path.nodes]
-    if len(set(ids)) != len(ids):
-        raise ValueError("duplicate node ids")
-    idset = set(ids)
-    if path.start_node not in idset:
-        raise ValueError("start_node does not exist")
-    for n in path.nodes:
-        for p in n.prereqs:
-            if p not in idset:
-                raise ValueError(f"prereq {p} of {n.id} does not exist")
-    for a, b in path.edges:
-        if a not in idset or b not in idset:
-            raise ValueError("edge references unknown node")
-    if not is_acyclic(path):
-        raise ValueError("path graph has a cycle")
-    return path
+class OutlineOut(Strict):
+    title: str
+    description: str = ""
+    level: Literal["beginner", "intermediate", "advanced"] = "beginner"
+    chapters: list[OutlineChapter]
+
+    @model_validator(mode="after")
+    def _check(self):
+        n = len(self.chapters)
+        if not MIN_CHAPTERS <= n <= MAX_CHAPTERS:
+            raise ValueError(f"outline needs {MIN_CHAPTERS}-{MAX_CHAPTERS} chapters, got {n}")
+        keys = [c.key for c in self.chapters]
+        if len(set(keys)) != n:
+            raise ValueError("duplicate chapter keys")
+        for c in self.chapters:
+            for p in c.prereqs:
+                if p not in keys:
+                    raise ValueError(f"prereq {p} of {c.key} does not exist")
+                if p == c.key:
+                    raise ValueError(f"{c.key} lists itself as a prerequisite")
+        if not is_acyclic({c.key: c.prereqs for c in self.chapters}):
+            raise ValueError("prerequisite graph has a cycle")
+        if not self.title.strip():
+            raise ValueError("title is empty")
+        return self
 
 
-def is_acyclic(path: PathOut) -> bool:
-    """Kahn's algorithm over prereq links and explicit edges."""
-    succ: dict[str, set[str]] = {n.id: set() for n in path.nodes}
-    for n in path.nodes:
-        for p in n.prereqs:
-            succ[p].add(n.id)
-    for a, b in path.edges:
-        succ[a].add(b)
-    indeg = {i: 0 for i in succ}
-    for a in succ:
-        for b in succ[a]:
-            indeg[b] += 1
-    queue = [i for i, d in indeg.items() if d == 0]
+def is_acyclic(graph: dict) -> bool:
+    """Kahn's algorithm. graph: node -> list of prerequisite nodes."""
+    indeg = {n: len(set(p)) for n, p in graph.items()}
+    succ: dict = {n: [] for n in graph}
+    for n, prereqs in graph.items():
+        for p in set(prereqs):
+            succ[p].append(n)
+    queue = [n for n, d in indeg.items() if d == 0]
     seen = 0
     while queue:
         cur = queue.pop()
         seen += 1
-        for b in succ[cur]:
-            indeg[b] -= 1
-            if indeg[b] == 0:
-                queue.append(b)
-    return seen == len(succ)
+        for s in succ[cur]:
+            indeg[s] -= 1
+            if indeg[s] == 0:
+                queue.append(s)
+    return seen == len(graph)
 
 
-# ------------------------------------------------------------------- 03 Teacher
-class LessonStep(Strict):
-    type: Literal["explain", "example", "check"]
-    text: str
+# --------------------------------------------------------------------- Curator
+class CuratorOut(Strict):
+    """Gemma fallback for relevance gating when Jev is unavailable: ids of candidates worth keeping."""
+    relevant: list[str]
 
 
-class Lesson(Strict):
+# --------------------------------------------------------------------- Teacher
+class Slide(Strict):
     title: str
-    steps: list[LessonStep]
-    key_points: list[str] = Field(default_factory=list)
-    source_refs: list[SourceRef]
-
-
-class LessonOut(Strict):
-    node_id: str
-    language: str
-    lesson: Lesson
+    points: list[str]
+    image_query: Optional[str] = None
 
     @model_validator(mode="after")
     def _check(self):
-        n = len(self.lesson.steps)
-        if not 3 <= n <= 5:
-            raise ValueError(f"lesson must have 3-5 steps, got {n}")
-        if not self.lesson.source_refs:
-            raise ValueError("lesson has no source refs")
-        total = sum(len(s.text) for s in self.lesson.steps)
-        if total > MAX_LESSON_CHARS:
-            raise ValueError(f"lesson too long ({total} chars)")
-        if any(not s.text.strip() for s in self.lesson.steps):
-            raise ValueError("empty lesson step")
+        if not 2 <= len(self.points) <= 4:
+            raise ValueError("a slide needs 2-4 points")
+        if not self.title.strip() or any(not p.strip() for p in self.points):
+            raise ValueError("empty slide text")
         return self
 
 
-# -------------------------------------------------------------------- 04 Critic
+class ChapterContent(Strict):
+    notes_md: str
+    slides: list[Slide]
+    key_points: list[str] = Field(default_factory=list)
+    summary: str
+    source_refs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if len(self.notes_md.strip()) < 120:
+            raise ValueError("notes are too short")
+        if len(self.notes_md) > MAX_NOTES_CHARS:
+            raise ValueError("notes are over the length cap")
+        if not 3 <= len(self.slides) <= 8:
+            raise ValueError(f"need 3-8 slides, got {len(self.slides)}")
+        if not self.summary.strip():
+            raise ValueError("summary is empty")
+        return self
+
+
+# ---------------------------------------------------------------------- Critic
 class CriticIssue(Strict):
-    step: int
+    step: int | str = 0
     problem: str
-    source_ref: Optional[SourceRef] = None
+    source_ref: Optional[str] = None
 
 
 class CriticOut(Strict):
@@ -197,7 +183,7 @@ class CriticOut(Strict):
         return self
 
 
-# ------------------------------------------------------------------ 05 Quizzer
+# -------------------------------------------------------------------- Quizzer
 class Question(Strict):
     id: str
     type: Literal["mcq"] = "mcq"
@@ -206,7 +192,7 @@ class Question(Strict):
     answer_key: str
     concept: str
     hint: str
-    source_ref: Optional[SourceRef] = None
+    source_ref: Optional[str] = None
 
     @model_validator(mode="after")
     def _check(self):
@@ -232,7 +218,6 @@ def resolve_key(q: Question) -> Optional[str]:
 
 
 class QuizOut(Strict):
-    node_id: str
     questions: list[Question]
 
     @model_validator(mode="after")
@@ -245,7 +230,7 @@ class QuizOut(Strict):
         return self
 
 
-# ---------------------------------------------------------------- 06 Diagnoser
+# ------------------------------------------------------------------- Diagnoser
 class DiagnoserOut(Strict):
     question_id: str
     result: Literal["correct", "partial", "wrong"]
@@ -260,30 +245,35 @@ class DiagnoserOut(Strict):
         return self
 
 
-# ------------------------------------------------------------------ 07 Rewriter
-class InsertOp(Strict):
-    after: str
-    node: PathNode
+# -------------------------------------------------------------------- Rewriter
+class ReviewInsert(Strict):
+    after: str            # id of the chapter the review item follows
+    title: str
+    summary: str = ""
+    objectives: list[str] = Field(default_factory=list)
 
 
-class Patch(Strict):
-    insert: list[InsertOp] = Field(default_factory=list)
-    reorder: list[str] = Field(default_factory=list)  # ids; listed nodes take their slots in this order
-    skip: list[str] = Field(default_factory=list)
+class ChapterPatch(Strict):
+    insert: list[ReviewInsert] = Field(default_factory=list)
 
 
 class RewriterOut(Strict):
-    path_id: str
-    patch: Patch
+    patch: ChapterPatch
     reason: str = ""
 
+    @model_validator(mode="after")
+    def _check(self):
+        if len(self.patch.insert) > MAX_INSERTS_PER_SESSION:
+            raise ValueError(f"at most {MAX_INSERTS_PER_SESSION} review items per session")
+        return self
 
-# ----------------------------------------------------------------- 08 Companion
+
+# ------------------------------------------------------------------- Companion
 class MemoryUpdates(BaseModel):
-    model_config = ConfigDict(extra="forbid")  # only allowed fields (spec)
+    model_config = ConfigDict(extra="forbid")  # only allowed fields
 
     mistake_labels_add: list[str] = Field(default_factory=list)
-    last_node: Optional[str] = None
+    last_chapter: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -302,7 +292,23 @@ class CompanionOut(Strict):
         return v
 
 
-# ------------------------------------------------- doubts (voice Q&A, extension)
+# ----------------------------------------------------------------------- Doubt
 class DoubtOut(Strict):
     answer: str
-    source_refs: list[SourceRef] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("answer")
+    @classmethod
+    def _nonempty(cls, v):
+        if not v.strip():
+            raise ValueError("empty answer")
+        return v
+
+
+# --------------------------------------------------------------------- profile
+class LearnerProfile(Strict):
+    learner_id: str
+    language: str = "en"
+    level: str = "beginner"
+    goal: Optional[str] = None
+    mistake_labels: list[str] = Field(default_factory=list)

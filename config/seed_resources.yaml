@@ -1,0 +1,19 @@
+# Small curated fallback per subject, used only when discovery finds too little. Every link is still
+# verified at runtime (HTTP status, robots.txt) before it is shown. Prefer stable, openly licensed sources.
+seeds:
+  - keywords: [python]
+    links:
+      "The Python Tutorial": https://docs.python.org/3/tutorial/
+  - keywords: [javascript, html, css, web development, frontend]
+    links:
+      "MDN Learn web development": https://developer.mozilla.org/en-US/docs/Learn
+  - keywords: [algorithm, data structure, dsa, sorting, graph, tree]
+    links:
+      "CP-Algorithms": https://cp-algorithms.com/
+      "VisuAlgo: algorithm visualisations": https://visualgo.net/en
+  - keywords: [math, algebra, calculus, geometry, statistics]
+    links:
+      "OpenStax Mathematics": https://openstax.org/subjects/math
+  - keywords: [physics, chemistry, biology, science]
+    links:
+      "OpenStax Science": https://openstax.org/subjects/science

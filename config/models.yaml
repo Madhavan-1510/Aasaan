@@ -21,6 +21,8 @@ defaults:
   timeout_s: 30
   max_retries_per_model: 1
   log_events: true
+  max_concurrent_calls: 4   # global limit on simultaneous model calls (AASAAN_MAX_CALLS overrides)
+  cache_calls: true         # cache validated model replies by input hash
 
 models:
   gemma_31b:     { provider: gemini_api, kind: chat, id: gemma-4-31b-it }        # strongest: planning, checking, vision

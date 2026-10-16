@@ -1,0 +1,17 @@
+# Caddy gets and renews HTTPS certificates automatically for AASAAN_DOMAIN.
+# With AASAAN_DOMAIN unset (local testing) it serves https://localhost with Caddy's local certificate.
+{$AASAAN_DOMAIN:localhost} {
+	encode gzip zstd
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options SAMEORIGIN
+		-Server
+	}
+
+	# flush_interval -1 keeps server-sent events (live chapter updates) flowing without buffering
+	reverse_proxy app:8000 {
+		flush_interval -1
+	}
+}

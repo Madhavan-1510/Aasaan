@@ -1,0 +1,122 @@
+"""The asyncio worker and the HTTP API (demo/mock mode)."""
+import asyncio
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+from app.worker import Worker
+
+
+def test_worker_limits_concurrency_and_finishes_everything(engine, store):
+    nid = engine.create_notebook("l1", "I want to learn data structures", "en", [])
+    engine.process_job(store.pending_jobs()[0]["id"])  # outline + chapter 1
+    state = {"active": 0, "peak": 0}
+    real_set = store.set_chapter_status
+
+    def slow_build(cid):
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.12)
+        real_set(cid, "ready")
+        state["active"] -= 1
+
+    engine.build_chapter = slow_build
+
+    async def go():
+        w = Worker(engine, concurrency=2, poll_s=0.02)
+        task = asyncio.create_task(w.run())
+        for _ in range(400):
+            if store.active_jobs(nid) == 0:
+                break
+            await asyncio.sleep(0.05)
+        w.stop()
+        await asyncio.wait_for(task, 2)
+
+    asyncio.run(go())
+    assert state["peak"] == 2  # two chapters at a time, not seven
+    assert all(c["status"] == "ready" for c in store.chapters(nid))
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.delenv("AASAAN_ADMIN_TOKEN", raising=False)
+    app = create_app(db_path=str(tmp_path / "t.db"), mode="mock", upload_dir=str(tmp_path / "up"))
+    with TestClient(app) as c:
+        yield c
+
+
+def wait_for(client, nid, key, timeout=30):
+    end = time.time() + timeout
+    while time.time() < end:
+        v = client.get(f"/api/notebooks/{nid}").json()
+        if v[key]:
+            return v
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for {key}: {v['status']}")
+
+
+def test_full_http_flow(client):
+    assert client.get("/api/health").json()["app"] == "aasaan"
+    lid = client.post("/api/learners").json()["learner_id"]
+    sid = client.post("/api/session/open", json={"learner_id": lid}).json()["session_id"]
+    nid = client.post("/api/notebooks", data={"learner_id": lid, "text": "I want to learn DSA", "language": "en"}).json()["notebook_id"]
+    v = wait_for(client, nid, "open_ready")  # opens as soon as the outline and chapter 1 are ready
+    assert 3 <= len(v["chapters"]) <= 20 and v["mode"] == "mock"
+    assert client.get("/api/notebooks", params={"learner_id": lid}).json()[0]["id"] == nid
+
+    cid = v["chapters"][0]["id"]
+    ch = client.get(f"/api/chapters/{cid}").json()
+    assert ch["status"] == "ready" and {"notes", "slides", "quiz", "summary"} <= {b["type"] for b in ch["blocks"]}
+    notes = next(b for b in ch["blocks"] if b["type"] == "notes")
+    assert client.put(f"/api/blocks/{notes['id']}", json={"markdown": "## Mine\n\nEdited"}).status_code == 200
+    q = next(b for b in ch["blocks"] if b["type"] == "quiz")["content"]["questions"][0]
+    fb = client.post(f"/api/chapters/{cid}/answer", json={"learner_id": lid, "session_id": sid, "question_id": q["id"], "answer": q["options"][-1]}).json()
+    assert fb["result"] == "wrong" and fb["misconception"]
+    fin = client.post(f"/api/chapters/{cid}/finish", json={"learner_id": lid, "session_id": sid}).json()
+    assert len(fin["added"]) == 1
+
+    for _ in range(300):  # everything fills in, including the review chapter
+        v = client.get(f"/api/notebooks/{nid}").json()
+        if v["status"] == "complete":
+            break
+        time.sleep(0.1)
+    assert v["status"] == "complete" and any(c["kind"] == "review" for c in v["chapters"])
+    assert client.get(f"/api/notebooks/{nid}/companion", params={"learner_id": lid}).json()["message"]
+    assert client.post("/api/session/close", json={"learner_id": lid, "session_id": sid, "notebook_id": nid}).json()["message"]
+    assert client.post(f"/api/chapters/{cid}/doubt", data={"learner_id": lid, "text": "what is this?"}).json()["answer"]
+    assert client.post("/api/voice/tts", json={"text": "hi", "language": "hi"}).json() == {"audio_b64": None}
+    assert client.delete(f"/api/notebooks/{nid}").status_code == 200
+
+
+def test_uploads_are_validated(client):
+    lid = client.post("/api/learners").json()["learner_id"]
+    bad = client.post("/api/notebooks", data={"learner_id": lid, "text": "x"}, files=[("files", ("a.exe", b"1", "application/octet-stream"))])
+    assert bad.status_code == 400 and "only photos and PDFs" in bad.json()["error"]
+    assert client.post("/api/notebooks", data={"learner_id": lid, "text": ""}).status_code == 400
+    ok = client.post("/api/notebooks", data={"learner_id": lid, "text": ""}, files=[("files", ("p.png", b"\x89PNG", "image/png"))])
+    assert ok.status_code == 200
+
+
+def test_per_ip_notebook_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("AASAAN_NB_PER_HOUR", "1")
+    with TestClient(create_app(db_path=str(tmp_path / "r.db"), mode="mock", start_worker=False)) as c:
+        lid = c.post("/api/learners").json()["learner_id"]
+        assert c.post("/api/notebooks", data={"learner_id": lid, "text": "learn math"}).status_code == 200
+        assert c.post("/api/notebooks", data={"learner_id": lid, "text": "learn physics"}).status_code == 429
+
+
+def test_internal_endpoints_are_protected(tmp_path, monkeypatch):
+    monkeypatch.setenv("AASAAN_ADMIN_TOKEN", "s3cret")
+    with TestClient(create_app(db_path=str(tmp_path / "a.db"), mode="mock", start_worker=False)) as c:
+        assert c.get("/api/events").status_code == 403
+        assert c.post("/api/admin/kill", json={"model": "gemma_31b"}).status_code == 403
+        h = {"x-admin-token": "s3cret"}
+        assert c.post("/api/admin/kill", json={"model": "gemma_31b"}, headers=h).json()["killed"] == ["gemma_31b"]
+        assert c.get("/api/events", headers=h).status_code == 200
+
+
+def test_health_models_endpoint(client):
+    rep = client.get("/api/health/models").json()
+    assert rep["mode"] == "mock" and rep["models"]["gemma_31b"]["id"] == "gemma-4-31b-it" and client.get("/health").json()["ok"]

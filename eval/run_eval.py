@@ -1,16 +1,18 @@
-"""Phase 6 evaluation: runs the PRD section 11 metrics and writes eval/report.md.
+"""Quality metrics for Aasaan (PRD section 11), runnable offline in mock mode or against real models.
 
     python eval/run_eval.py                 # mode from env (mock if no GEMINI_API_KEY)
-    python eval/run_eval.py --mode live     # real models; needs keys
+    python eval/run_eval.py --mode live     # real models: needs keys, uses quota
 
-In mock mode the Critic always approves, so the Critic metric is reported as SKIPPED (not meaningful).
+Mock mode proves the plumbing only; the Critic metric is SKIPPED there because the mock always approves.
 The expected labels in eval/data/graded_answers.json are DRAFTS until a teacher confirms them.
+Writes eval/report.md.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -20,126 +22,127 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.agents import critic, diagnoser, intake  # noqa: E402
 from app.db import Store  # noqa: E402
+from app.engine import Engine  # noqa: E402
 from app.main import load_env  # noqa: E402
-from app.orchestrator import Engine  # noqa: E402
-from app.router import AllFailed, ModelRouter  # noqa: E402
-from app.schemas import LearnerProfile, LessonOut, Question  # noqa: E402
+from app.router import ModelRouter  # noqa: E402
+from app.schemas import ChapterContent, LearnerProfile, Question  # noqa: E402
+from app.worker import Worker  # noqa: E402
 
 DATA = ROOT / "eval" / "data"
 SAMPLE = (ROOT / "samples" / "motion_chapter.txt").read_text(encoding="utf-8")
+LEARNER = "eval-learner"
 
 
 def pct(n: int, d: int) -> float:
     return 100.0 * n / d if d else 0.0
 
 
-def fresh(mode: str | None) -> tuple[Store, ModelRouter, Engine]:
+def fresh(mode):
     store = Store(":memory:")
     router = ModelRouter(store=store, mode=mode)
-    return store, router, Engine(store, router)
+    engine = Engine(store, router, upload_dir=tempfile.mkdtemp(), retry_delay_s=0)
+    return store, router, engine, Worker(engine)
 
 
-def run_flow(engine: Engine, wrong_first: bool = True) -> dict:
-    """One full pass over the first node. Returns facts used by several metrics."""
-    lid = engine.create_learner(9, "en", "exam on Friday")
-    out = engine.start(lid, None, SAMPLE, None, None, "en", "exam on Friday")
-    pid, nid, sid = out["path"]["path_id"], out["path"]["current"], out["session_id"]
-    les = engine.lesson(lid, pid, nid)
-    engine.quiz(lid, pid, nid)
-    quiz = engine.store.get_quiz(pid, nid)
-    n_before = len(out["path"]["nodes"])
-    for i, q in enumerate(quiz["questions"]):
-        ans = q["options"][-1] if (wrong_first and i == 0) else q["answer_key"]
-        engine.answer(lid, sid, pid, nid, q["id"], ans)
-    fin = engine.finish_node(lid, sid, pid, nid)
-    engine.close_session(lid, sid, pid)
-    return {"lid": lid, "pid": pid, "nid": nid, "lesson": les, "n_before": n_before,
-            "n_after": len(fin["path"]["nodes"]), "patch": fin["patch"]}
+def build(engine, worker, text=SAMPLE):
+    nid = engine.create_notebook(LEARNER, text, "en", [])
+    worker.run_until_idle()
+    return nid
+
+
+def wrong_answer_flow(engine, store, nid):
+    ch = engine.notebook_view(nid)["chapters"][0]
+    qb = next(b for b in store.blocks(ch["id"]) if b["type"] == "quiz")
+    q = qb["content"]["questions"][0]
+    sid = engine.open_session(LEARNER)
+    engine.answer(LEARNER, sid, ch["id"], q["id"], next(o for o in q["options"] if o != q["answer_key"]))
+    for other in qb["content"]["questions"][1:]:
+        engine.answer(LEARNER, sid, ch["id"], other["id"], other["answer_key"])
+    return ch, sid, engine.finish_chapter(LEARNER, sid, ch["id"])
 
 
 # ------------------------------------------------------------------ metrics
-def m_grading(router: ModelRouter) -> tuple[str, bool, str]:
+def m_grading(router):
     d = json.loads((DATA / "graded_answers.json").read_text(encoding="utf-8"))
     qs = {q["id"]: Question.model_validate(q) for q in d["questions"]}
-    agree = 0
-    for a in d["answers"]:
-        got = diagnoser.run(router, qs[a["question_id"]], a["answer"], []).value.result
-        agree += int((got == "correct") == (a["expected"] == "correct"))
+    agree = sum(int((diagnoser.run(router, qs[a["question_id"]], a["answer"], []).value.result == "correct") == (a["expected"] == "correct"))
+                for a in d["answers"])
     n = len(d["answers"])
     return f"{agree}/{n} = {pct(agree, n):.0f}%", pct(agree, n) >= 80, "target >= 80% (labels are drafts until a teacher confirms)"
 
 
-def m_critic(router: ModelRouter, mode: str) -> tuple[str, bool | None, str]:
+def m_critic(router, mode):
     if mode == "mock":
         return "SKIPPED", None, "mock Critic always approves; run with --mode live"
-    d = json.loads((DATA / "seeded_lessons.json").read_text(encoding="utf-8"))["lessons"]
-    pages_text = intake.pages_from_text(SAMPLE)
-    chunks_all, _ = intake.chunk_pages("s1", pages_text)
-    prof = LearnerProfile(learner_id="eval", grade=9, language="en")
+    items = json.loads((DATA / "seeded_lessons.json").read_text(encoding="utf-8"))["lessons"]
+    chunks_all, _ = intake.chunk_pages("s1", intake.pages_from_text(SAMPLE))
+    prof = LearnerProfile(learner_id="eval")
     caught = flawed = approved = good = 0
     used = Counter()
-    for item in d:
-        chunks = [c for c in chunks_all if c["page"] == item["page"]]
-        lesson = LessonOut.model_validate({
-            "node_id": "n1", "language": "en",
-            "lesson": {"title": "Seeded", "steps": [{"type": t, "text": s} for t, s in
-                       zip(["explain", "example", "check"], item["steps"])],
-                       "key_points": [], "source_refs": [{"source_id": "s1", "page": item["page"],
-                                                           "chunk_id": chunks[0]["chunk_id"]}]}})
-        res = critic.run(router, lesson, chunks, prof)
+    for it in items:
+        chunks = [c for c in chunks_all if c["page"] == it["page"]]
+        notes = "## Seeded chapter\n\n" + "\n\n".join(it["steps"])
+        content = ChapterContent.model_validate({
+            "notes_md": notes.ljust(130, "."), "summary": it["steps"][0], "key_points": it["steps"][:2], "source_refs": [chunks[0]["chunk_id"]],
+            "slides": [{"title": f"Slide {i}", "points": [s, "See the notes"]} for i, s in enumerate(it["steps"], 1)]})
+        res = critic.run(router, content, chunks, prof)
         used[res.model_used] += 1
-        if item["flaw"]:
+        if it["flaw"]:
             flawed += 1
             caught += int(res.value.verdict != "approve")
         else:
             good += 1
             approved += int(res.value.verdict == "approve")
     ok = pct(caught, flawed) >= 80 and pct(approved, good) >= 80
-    return (f"caught {caught}/{flawed}, approved {approved}/{good} (models: {dict(used)})", ok,
-            "target >= 8/10 each; rule_checks cannot catch factual errors")
+    return f"caught {caught}/{flawed}, approved {approved}/{good} (models: {dict(used)})", ok, "target >= 8/10 each; rule_checks cannot catch factual errors"
 
 
-def m_source_refs(engine: Engine) -> tuple[str, bool, str]:
-    lid = engine.create_learner(9, "en", None)
-    out = engine.start(lid, None, SAMPLE, None, None, "en", None)
-    pid = out["path"]["path_id"]
-    src = engine.store.get_source(engine.store.get_path(pid)["source_id"])
-    known = {c["chunk_id"] for c in src["chunks"]}
-    total = good = 0
-    for n in out["path"]["nodes"]:
-        les = engine.lesson(lid, pid, n["id"])["lesson"]
-        total += 1
-        good += int(bool(les["source_refs"]) and all(r["chunk_id"] in known for r in les["source_refs"]))
-    return f"{good}/{total} lessons", good == total, "target 100%"
+def m_source_refs(mode):
+    store, router, engine, worker = fresh(mode)
+    nid = build(engine, worker)
+    known = {c["chunk_id"] for s in store.sources(nid) for c in s["chunks"]}
+    chs = engine.notebook_view(nid)["chapters"]
+    good = 0
+    for c in chs:
+        notes = next(b for b in store.blocks(c["id"]) if b["type"] == "notes")
+        refs = notes["meta"].get("refs", [])
+        good += int(bool(refs) and all(r in known or r.startswith("url:") or r.startswith("w") for r in refs))
+    return f"{good}/{len(chs)} chapters", good == len(chs), "target 100%"
 
 
-def m_fallback(mode: str) -> tuple[str, bool, str]:
-    results = {}
-    for label, kills in [("primary dead", ["gemma_31b"]),
-                         ("all models dead", list(fresh(mode)[1].cfg["models"]))]:
-        _, router, engine = fresh(mode)
-        for k in kills:
-            router.kill(k)
+def m_fallback(mode):
+    out = {}
+    for label, kill in [("primary dead", ["gemma_31b"]), ("all models dead", None)]:
+        _, router, engine, worker = fresh(mode)
+        for m in (kill if kill else list(router.cfg["models"])):
+            router.kill(m)
         try:
-            run_flow(engine)
-            results[label] = "pass"
-        except (AllFailed, Exception) as e:  # any crash is a failure of the fallback promise
-            results[label] = f"FAIL ({type(e).__name__}: {e})"
-    return "; ".join(f"{k}: {v}" for k, v in results.items()), all(v == "pass" for v in results.values()), "flow completes"
+            nid = build(engine, worker)
+            v = engine.notebook_view(nid)
+            out[label] = "pass" if v["open_ready"] else f"FAIL ({v['status']}: {v['error']})"
+        except Exception as e:
+            out[label] = f"FAIL ({type(e).__name__}: {e})"
+    return "; ".join(f"{k}: {v}" for k, v in out.items()), all(v == "pass" for v in out.values()), "notebook opens (with source material, code-only fallbacks allowed)"
 
 
-def m_path_changes(engine: Engine) -> tuple[str, bool, str]:
-    r = run_flow(engine, wrong_first=True)
-    ok = r["n_after"] > r["n_before"]
-    return f"{r['n_before']} -> {r['n_after']} nodes", ok, "path visibly changes after a wrong answer"
+def m_review(mode):
+    store, router, engine, worker = fresh(mode)
+    nid = build(engine, worker)
+    before = len(engine.notebook_view(nid)["chapters"])
+    _, _, fin = wrong_answer_flow(engine, store, nid)
+    after = len(engine.notebook_view(nid)["chapters"])
+    return f"{before} -> {after} chapters ({[a['title'][:40] for a in fin['added']]})", after > before, "course gains a review item after a wrong answer"
 
 
-def m_memory(engine: Engine) -> tuple[str, bool, str]:
-    r = run_flow(engine, wrong_first=True)
-    s2 = engine.open_session(r["lid"])
-    label = (engine.store.mistake_labels(r["lid"]) or [None])[0]
-    ok = bool(label) and label in s2["message"]
-    return f'"{s2["message"][:70]}"', ok, "second session references an earlier mistake"
+def m_memory(mode):
+    store, router, engine, worker = fresh(mode)
+    nid = build(engine, worker)
+    _, sid, _ = wrong_answer_flow(engine, store, nid)
+    engine.close_session(LEARNER, sid, nid)
+    engine.open_session(LEARNER)
+    msg = engine.companion_open(LEARNER, nid)["message"]
+    label = (store.mistake_labels(LEARNER) or [None])[0]
+    return f'"{msg[:70]}"', bool(label) and label in msg, "second session references an earlier mistake"
 
 
 def main() -> int:
@@ -147,17 +150,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["mock", "live"], default=None)
     args = ap.parse_args()
-    store, router, engine = fresh(args.mode)
+    store, router, engine, worker = fresh(args.mode)
     mode = router.mode
-    rows = [
-        ("Grading agreement (20 answers)", *m_grading(router)),
-        ("Critic catches seeded errors", *m_critic(router, mode)),
-        ("Lessons with valid source refs", *m_source_refs(engine)),
-        ("Fallback: kill models, flow completes", *m_fallback(mode)),
-        ("Path changes after a wrong answer", *m_path_changes(fresh(mode)[2])),
-        ("Second session mentions earlier mistake", *m_memory(fresh(mode)[2])),
-    ]
-    lines = [f"# Evaluation report", "", f"Run: {datetime.now():%Y-%m-%d %H:%M}  |  mode: **{mode}**", "",
+    rows = [("Grading agreement (20 answers)", *m_grading(router)), ("Critic catches seeded errors", *m_critic(router, mode)),
+            ("Chapters with valid source refs", *m_source_refs(mode)), ("Fallback: kill models, notebook still opens", *m_fallback(mode)),
+            ("Course gains a review item after a wrong answer", *m_review(mode)), ("Second session mentions earlier mistake", *m_memory(mode))]
+    lines = ["# Evaluation report", "", f"Run: {datetime.now():%Y-%m-%d %H:%M}  |  mode: **{mode}**", "",
              "| Metric | Result | Status | Note |", "|---|---|---|---|"]
     failed = 0
     for name, result, ok, note in rows:
