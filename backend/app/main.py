@@ -336,8 +336,14 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
                 if not question:
                     yield ev("done", {"id": None, "refs": []})
                     return
-                yield ev("status", {"text": "Looking through your course…"})
-                res = await run_in_threadpool(engine.chat_reply, nid, learner_id, question, chapter_id, blocks)
+                yield ev("status", {"text": "Thinking…"})
+                res = await run_in_threadpool(engine.handle_chat, nid, learner_id, question, chapter_id, blocks)
+                if res["type"] == "proposal":      # a card with Apply and Dismiss: nothing has changed yet
+                    p = res["proposal"]
+                    yield ev("proposal", {"id": p["message_id"], "proposal": {k: v for k, v in p.items() if k != "message_id"}, "content": p["summary"]})
+                    yield ev("done", {"id": p["message_id"], "refs": []})
+                    return
+                res = {"answer": res["text"], "refs": res["refs"]}
             except Exception as e:  # noqa: BLE001  the student gets a calm message, the detail stays in the log
                 log_.warning("[aasaan] chat failed: %s", e)
                 msg = "I couldn't answer that just now. Please try again in a moment."
@@ -352,6 +358,35 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
             yield ev("done", {"id": aid, "refs": res["refs"]})
 
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ---- proposals: the student applies, dismisses or undoes
+    def _prop(fn, nid, pid):
+        try:
+            return fn(nid, pid)
+        except UserError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/notebooks/{nid}/proposals/{pid}")
+    def proposal(nid: str, pid: int):
+        return _prop(engine.proposal, nid, pid)
+
+    @app.post("/api/notebooks/{nid}/proposals/{pid}/apply")
+    async def proposal_apply(nid: str, pid: int):
+        try:
+            return await run_in_threadpool(engine.apply_proposal, nid, pid)
+        except UserError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/notebooks/{nid}/proposals/{pid}/undo")
+    async def proposal_undo(nid: str, pid: int):
+        try:
+            return await run_in_threadpool(engine.undo_proposal, nid, pid)
+        except UserError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/notebooks/{nid}/proposals/{pid}/dismiss")
+    def proposal_dismiss(nid: str, pid: int):
+        return _prop(engine.dismiss_proposal, nid, pid)
 
     @app.get("/api/notebooks/{nid}/companion")
     def companion_open(nid: str, learner_id: str):

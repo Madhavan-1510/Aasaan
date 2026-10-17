@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id TEXT, role TEXT, kind TEXT DEFAULT 'chat', content TEXT,
   attachments TEXT, refs TEXT, key TEXT, created_at REAL);
 CREATE INDEX IF NOT EXISTS ix_messages_nb ON messages(notebook_id, id);
+CREATE TABLE IF NOT EXISTS proposals(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id TEXT, source TEXT, status TEXT, summary TEXT, ops TEXT, undo TEXT,
+  touched TEXT, created_at REAL, applied_at REAL, undone_at REAL);
+CREATE INDEX IF NOT EXISTS ix_proposals_nb ON proposals(notebook_id, id);
+CREATE TABLE IF NOT EXISTS chapter_revisions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id TEXT, chapter_id INTEGER, proposal_id INTEGER, kind TEXT, snapshot TEXT, created_at REAL);
+CREATE INDEX IF NOT EXISTS ix_revisions_prop ON chapter_revisions(proposal_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_key ON messages(notebook_id, key) WHERE key IS NOT NULL;
 """
 
@@ -149,7 +156,7 @@ class Store:
             ids = [r["id"] for r in self.conn.execute("SELECT id FROM chapters WHERE notebook_id=?", (nid,))]
             for cid in ids:
                 self.conn.execute("DELETE FROM blocks WHERE chapter_id=?", (cid,))
-            for t in ("chapters", "sources", "jobs", "quiz_attempts", "messages"):
+            for t in ("chapters", "sources", "jobs", "quiz_attempts", "messages", "proposals", "chapter_revisions"):
                 self.conn.execute(f"DELETE FROM {t} WHERE notebook_id=?", (nid,))
             self.conn.execute("DELETE FROM notebooks WHERE id=?", (nid,))
 
@@ -165,6 +172,84 @@ class Store:
 
     def update_source_chunks(self, sid: str, chunks: list[dict]) -> None:
         self._run("UPDATE sources SET chunks=? WHERE id=?", (_j(chunks), sid))
+
+    # ============================================================== proposals and revisions
+    def add_proposal(self, nid: str, source: str, summary: str, ops: list) -> int:
+        cur = self._run("INSERT INTO proposals(notebook_id,source,status,summary,ops,created_at) VALUES(?,?,?,?,?,?)",
+                        (nid, source, "pending", summary, _j(ops), time.time()))
+        return int(cur.lastrowid)
+
+    @staticmethod
+    def _proposal(r: sqlite3.Row) -> dict:
+        d = dict(r)
+        d["ops"], d["undo"], d["touched"] = _l(d["ops"], []), _l(d.get("undo"), None), _l(d.get("touched"), [])
+        return d
+
+    def get_proposal(self, pid: int) -> Optional[dict]:
+        r = self._one("SELECT * FROM proposals WHERE id=?", (pid,))
+        return self._proposal(r) if r else None
+
+    def proposals(self, nid: str, limit: int = 30) -> list[dict]:
+        return [self._proposal(r) for r in self._all("SELECT * FROM proposals WHERE notebook_id=? ORDER BY id DESC LIMIT ?", (nid, limit))]
+
+    def update_proposal(self, pid: int, **f: Any) -> None:
+        allowed = {"status", "summary", "ops", "undo", "touched", "applied_at", "undone_at"}
+        sets = {k: (_j(v) if k in ("ops", "undo", "touched") else v) for k, v in f.items() if k in allowed}
+        if sets:
+            self._run(f"UPDATE proposals SET {', '.join(k + '=?' for k in sets)} WHERE id=?", (*sets.values(), pid))
+
+    def add_revision(self, nid: str, cid: int, pid: int, kind: str, snapshot: dict) -> int:
+        cur = self._run("INSERT INTO chapter_revisions(notebook_id,chapter_id,proposal_id,kind,snapshot,created_at) VALUES(?,?,?,?,?,?)",
+                        (nid, cid, pid, kind, _j(snapshot), time.time()))
+        return int(cur.lastrowid)
+
+    def revisions(self, pid: int) -> list[dict]:
+        out = []
+        for r in self._all("SELECT * FROM chapter_revisions WHERE proposal_id=? ORDER BY id", (pid,)):
+            d = dict(r)
+            d["snapshot"] = _l(d["snapshot"], {})
+            out.append(d)
+        return out
+
+    def delete_revisions(self, pid: int) -> None:
+        self._run("DELETE FROM chapter_revisions WHERE proposal_id=?", (pid,))
+
+    def chapter_snapshot(self, cid: int) -> Optional[dict]:
+        """Everything needed to bring a chapter back exactly as it was: its row and its blocks."""
+        ch = self.get_chapter(cid)
+        if not ch:
+            return None
+        return {"chapter": ch, "blocks": [{"type": b["type"], "content": b["content"], "verified": b["verified"], "meta": b["meta"]} for b in self.blocks(cid)]}
+
+    def delete_chapter(self, cid: int) -> None:
+        with self.transaction():
+            self.conn.execute("DELETE FROM blocks WHERE chapter_id=?", (cid,))
+            self.conn.execute("DELETE FROM chapters WHERE id=?", (cid,))
+            self.conn.execute("UPDATE jobs SET state='cancelled', updated_at=? WHERE chapter_id=? AND state='queued'", (time.time(), cid))
+
+    def restore_chapter(self, snap: dict) -> None:
+        """Re-create a deleted chapter with its original id, position and blocks."""
+        c = snap["chapter"]
+        with self.transaction():
+            self.conn.execute("DELETE FROM blocks WHERE chapter_id=?", (c["id"],))
+            self.conn.execute("DELETE FROM chapters WHERE id=?", (c["id"],))
+            self.conn.execute(
+                "INSERT INTO chapters(id,notebook_id,position,title,summary,objectives,prereqs,status,priority,source_refs,kind,needs_review,completed,started,meta,error,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (c["id"], c["notebook_id"], c["position"], c["title"], c["summary"], _j(c["objectives"]), _j(c["prereqs"]), c["status"], c.get("priority", 0),
+                 _j(c["source_refs"]), c["kind"], int(c["needs_review"]), int(c["completed"]), int(c["started"]), _j(c["meta"]), c.get("error") or "", time.time()))
+            for i, b in enumerate(snap["blocks"]):
+                self.conn.execute("INSERT INTO blocks(chapter_id,position,type,content,verified,meta) VALUES(?,?,?,?,?,?)",
+                                  (c["id"], i, b["type"], _j(b["content"]), int(bool(b.get("verified"))), _j(b.get("meta") or {})))
+
+    def set_positions(self, order: list[int]) -> None:
+        """Positions 1..n in the given id order."""
+        with self.transaction():
+            for pos, cid in enumerate(order, start=1):
+                self.conn.execute("UPDATE chapters SET position=? WHERE id=?", (pos, cid))
+
+    def cancel_chapter_jobs(self, cid: int) -> None:
+        self._run("UPDATE jobs SET state='cancelled', updated_at=? WHERE chapter_id=? AND state='queued'", (time.time(), cid))
 
     def delete_source(self, sid: str) -> None:
         self._run("DELETE FROM sources WHERE id=?", (sid,))

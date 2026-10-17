@@ -11,7 +11,7 @@ export function createChat(ctx) {
   const el = { msgs: document.getElementById("msgs"), input: document.getElementById("chatinput"), send: document.getElementById("chatsend"),
                atts: document.getElementById("chatatts"), ctx: document.getElementById("ctxrow"), file: document.getElementById("chatfile"),
                pane: document.getElementById("chatpane") };
-  const st = { lastId: 0, seen: new Set(), files: [], context: [], busy: false, stick: true, seq: 0 };
+  const st = { lastId: 0, seen: new Set(), files: [], context: [], busy: false, stick: true, seq: 0, cards: new Map() };
 
   // ------------------------------------------------------------------ rendering
   const attHtml = (list) => (list || []).map((a) => {
@@ -22,10 +22,35 @@ export function createChat(ctx) {
   }).join("");
   const chipsHtml = (refs) => (refs || []).length ? `<div class="chips">${refs.map((r, i) => `<button class="srcchip" data-chip="${i}" type="button">${r.kind === "chapter" ? "Chapter · " : r.kind === "resource" ? "" : "Web · "}${esc(r.label)}</button>`).join("")}</div>` : "";
 
+  // proposal card: a plain summary, what Apply will do, and buttons that follow its state (pending, applied, undone, dismissed)
+  const PSTATE = { applied: "Applied", undone: "Undone", dismissed: "Dismissed" };
+  function cardHtml(p) {
+    const lines = p.lines.length > 1 ? `<ul class="plines">${p.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : "";
+    const title = p.lines.length > 1 ? `${p.lines.length} changes to your course` : esc(p.lines[0] || p.summary);
+    const acts = p.status === "pending" ? `<button class="btn" data-pa="apply" type="button">Apply</button><button class="btn ghost" data-pa="dismiss" type="button">Dismiss</button>`
+      : p.status === "applied" && p.can_undo ? `<span class="pstate">Applied</span><button class="btn ghost" data-pa="undo" type="button">Undo</button>`
+      : `<span class="pstate">${PSTATE[p.status] || p.status}</span>`;
+    return `<div class="pcard" data-p="${p.id}" data-s="${p.status}"><div class="ptitle">${title}</div>${lines}<div class="pact">${acts}</div></div>`;
+  }
+  function wireCard(root, p) {
+    root.querySelectorAll("[data-pa]").forEach((b) => b.onclick = async () => {
+      const act = b.dataset.pa; root.querySelectorAll("[data-pa]").forEach((x) => (x.disabled = true));
+      try { const v = await ctx.api(`notebooks/${ctx.nid}/proposals/${p.id}/${act}`, {}); paintCard(root, v); ctx.afterEdit?.(act); }
+      catch (e) { ctx.toast(e.message || String(e)); paintCard(root, p); }
+    });
+  }
+  function paintCard(root, p) { const col = root.querySelector(".pcard"); if (!col) return; col.outerHTML = cardHtml(p); st.cards.set(p.id, p); wireCard(root, p); }
+
   function bubble(m) {
     const row = document.createElement("div");
     row.className = "msgrow " + (m.role === "user" ? "me" : m.kind === "system" ? "sysrow" : "bot");
     row.dataset.id = m.id || "";
+    if (m.kind === "proposal" && m.proposal) {   // an edit suggestion: a card, never a silent change
+      row.className = "msgrow bot";
+      row.innerHTML = `<span class="pul" aria-hidden="true">${ICON.logo}</span><div class="msgcol">${cardHtml(m.proposal)}</div>`;
+      st.cards.set(m.proposal.id, m.proposal); wireCard(row, m.proposal);
+      return row;
+    }
     const avatar = m.role === "user" ? "" : `<span class="pul" aria-hidden="true">${ICON.logo}</span>`;
     row.innerHTML = `${avatar}<div class="msgcol"><div class="msg ${m.role === "user" ? "user" : m.kind === "system" ? "sys" : "bot"}">${esc(m.content).replace(/\n/g, "<br>")}${m.role === "user" ? attHtml(m.attachments) : ""}</div>${chipsHtml(m.refs)}</div>`;
     row.querySelectorAll(".srcchip").forEach((b) => b.onclick = () => ctx.onChip(m.refs[Number(b.dataset.chip)]));
@@ -47,6 +72,12 @@ export function createChat(ctx) {
       const quiet = st.lastId === 0;   // the first load is history, not news
       r.messages.forEach((m) => add(m, quiet));
     } catch { /* the next snapshot retries */ }
+  }
+  function refreshCards(nb) {   // card buttons follow the notebook snapshot (an Undo is only offered for the latest change)
+    (nb.proposals || []).forEach((s) => {
+      const p = st.cards.get(s.id); if (!p || (p.status === s.status && p.can_undo === s.can_undo)) return;
+      const root = el.msgs.querySelector(`.pcard[data-p="${s.id}"]`)?.closest(".msgrow"); if (root) paintCard(root, { ...p, status: s.status, can_undo: s.can_undo });
+    });
   }
   function refreshStatuses() {   // upload chips follow the resource status in the notebook snapshot
     el.msgs.querySelectorAll(".attchip").forEach((c) => {
@@ -92,6 +123,7 @@ export function createChat(ctx) {
     const handle = (name, d) => {
       if (name === "user") { mine.dataset.id = d.id; st.seen.add(d.id); st.lastId = Math.max(st.lastId, d.id); mine.querySelectorAll(".attchip .st").forEach((s) => (s.textContent = "Reading…")); }
       else if (name === "status") showTyping(d.text);
+      else if (name === "proposal") { typing?.remove(); typing = null; st.seen.add(d.id); st.lastId = Math.max(st.lastId, d.id); el.msgs.appendChild(bubble({ role: "assistant", kind: "proposal", id: d.id, proposal: d.proposal })); scrollEnd(); }
       else if (name === "delta") { if (!botEl) { typing?.remove(); typing = null; botEl = bubble({ role: "assistant", kind: "chat", content: "" }); el.msgs.appendChild(botEl); } botText += d.text; botEl.querySelector(".msg").innerHTML = esc(botText).replace(/\n/g, "<br>"); scrollEnd(); }
       else if (name === "done") { done = true; if (botEl && d.id) { st.seen.add(d.id); st.lastId = Math.max(st.lastId, d.id); botEl.dataset.id = d.id; const col = botEl.querySelector(".msgcol"); col.insertAdjacentHTML("beforeend", chipsHtml(d.refs)); col.querySelectorAll(".srcchip").forEach((b) => b.onclick = () => ctx.onChip(d.refs[Number(b.dataset.chip)])); } scrollEnd(); }
       else if (name === "error") { errored = true; typing?.remove(); typing = null; add({ role: "assistant", kind: "chat", content: d.content, id: d.id }); }
@@ -129,5 +161,5 @@ export function createChat(ctx) {
   if (mic && ctx.wireMic) ctx.wireMic(mic, (t) => { el.input.value = (el.input.value ? el.input.value + " " : "") + t; autosize(); sync2(); el.input.focus(); });
   drawAtts(); sync();
 
-  return { sync, refreshStatuses, ask, addFiles, onSnapshot(nb) { if (nb.message_seq > st.lastId) sync(); refreshStatuses(); }, focus() { el.input.focus(); } };
+  return { sync, refreshStatuses, ask, addFiles, onSnapshot(nb) { if (nb.message_seq > st.lastId) sync(); refreshStatuses(); refreshCards(nb); }, focus() { el.input.focus(); } };
 }

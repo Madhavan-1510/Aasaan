@@ -24,6 +24,7 @@ from typing import Optional
 from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
 from .db import Store
+from . import edits
 from .tools import ToolRunner
 from .router import AllFailed, ModelRouter
 from .schemas import (MAX_INSERTS_PER_SESSION, ChapterContent, CriticOut, IntakeOut, LearnerProfile, OutlineOut,
@@ -51,8 +52,7 @@ def friendly_error(e: Exception, notebook: bool = True) -> str:
     return "Something went wrong while building this. Please try again."
 
 
-class UserError(Exception):
-    """Bad request or missing data; surfaced as HTTP 400/404."""
+from .errors import UserError  # noqa: E402,F401  (re-exported: the API and the tests import it from here)
 
 
 def split_request(text: str) -> tuple[Optional[str], str, list[str]]:
@@ -418,10 +418,6 @@ class Engine:
                 self.say(nid, msg + " Details are under Resources.", key=f"issue:{src['id']}:{i['kind']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
 
     # ---- messages and answers
-    def chat_history(self, nid: str, after: int = 0) -> list[dict]:
-        self._nb(nid)
-        return self.store.messages(nid, after)
-
     @staticmethod
     def _block_text(b: dict) -> str:
         c = b["content"]
@@ -457,7 +453,7 @@ class Engine:
                 out.append(c)
         return out[:5]
 
-    def chat_reply(self, nid: str, learner_id: str, text: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None) -> dict:
+    def chat_reply(self, nid: str, learner_id: str, text: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None, style: str = "") -> dict:
         """Answer a question about the notebook from its own sources and the chapter in focus. Returns {answer, refs}."""
         nb = self._nb(nid)
         prof = self.profile(learner_id, nb)
@@ -481,8 +477,103 @@ class Engine:
         if ctx_parts:
             notes = "The student is asking about this part of the course:\n" + "\n".join(ctx_parts) + "\n\n" + notes
         with self._scope(nid):
-            res = doubt.run(self.router, text, pool[:6], prof, notes)
+            res = doubt.run(self.router, text, pool[:6], prof, notes, style)
         return {"answer": res.value.answer, "refs": self._ref_chips(nid, res.value.source_refs, ch)}
+
+    # ---- one chat turn: what does the student want, and do it
+    def handle_chat(self, nid: str, learner_id: str, question: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None) -> dict:
+        """{"type": "text", "text", "refs"} (stored by the caller) or {"type": "proposal", ...} (already stored as a chat card)."""
+        chs = self.store.chapters(nid)
+        intent = gates.route_intent(self.router, question, {"message": question[:500], "chapters": [c["title"] for c in chs][:25]})
+        kind = intent["intent"]
+        self.router.note("intent", "ok", f"chat intent: {kind}", f"decided by {intent['by']}" + (" (unsure: asked to clarify)" if intent["unsure"] else ""))
+        if intent["unsure"]:
+            return {"type": "text", "text": "Do you want me to answer a question about your course, or change the course?", "refs": []}
+        if kind == "other":
+            refusal = gates.input_gate(self.router, question)
+            return {"type": "text", "refs": [], "text": refusal or "I can help with your course: ask me a question about it, add a file or link, or ask me to change the course."}
+        if kind == "add_resource":
+            return {"type": "text", "refs": [], "text": "Attach the file or paste the link here, or use Add a resource under Resources, and I'll read it."}
+        if kind == "quiz_me":
+            ch = self._focus_chapter(chs, question, chapter_id)
+            if not ch or ch["status"] != "ready":
+                return {"type": "text", "refs": [], "text": "Pick a chapter that is ready and I'll open its quiz."}
+            return {"type": "text", "text": f"Here is the quiz for chapter {ch['position']}. Answer it on the course page.", "refs": [{**self._chapter_ref(ch), "quiz": True}]}
+        if kind == "edit_course":
+            p = edits.propose(self, nid, learner_id, question)
+            if p is None:
+                return {"type": "text", "refs": [], "text": "I couldn't turn that into a change to the course. Try something like \"add a chapter on Delta Lake after chapter 5\"."}
+            return {"type": "proposal", "proposal": p}
+        out = self.chat_reply(nid, learner_id, question, chapter_id, block_ids, style="explain" if kind == "explain" else "")
+        return {"type": "text", "text": out["answer"], "refs": out["refs"]}
+
+    @staticmethod
+    def _focus_chapter(chs: list[dict], text: str, chapter_id: Optional[int]) -> Optional[dict]:
+        ch = next((c for c in chs if c["id"] == chapter_id), None)
+        words = set(re.findall(r"\w{3,}", text.lower()))
+        m = re.search(r"chapter\s+(\d+)", text.lower())
+        if m:
+            ch = next((c for c in chs if c["position"] == int(m.group(1))), ch)
+        elif ch is None:
+            score = lambda c: len(words & set(re.findall(r"\w{3,}", f"{c['title']} {c['summary']}".lower())))  # noqa: E731
+            ch = max(chs, key=score, default=None)
+        return ch
+
+    def _assert_acyclic(self, nid: str) -> None:
+        graph = {c["id"]: [p for p in c["prereqs"]] for c in self.store.chapters(nid)}
+        state: dict = {}
+
+        def visit(n):
+            if state.get(n) == 1:
+                raise ValueError("prerequisite cycle")
+            if state.get(n) == 2 or n not in graph:
+                return
+            state[n] = 1
+            for p in graph[n]:
+                visit(p)
+            state[n] = 2
+
+        for n in graph:
+            visit(n)
+
+    # ---- proposals (apply / undo / dismiss live in edits.py)
+    def proposal(self, nid: str, pid: int) -> dict:
+        p = self.store.get_proposal(pid)
+        if not p or p["notebook_id"] != nid:
+            raise UserError("unknown proposal")
+        return edits.view(self.store, p)
+
+    def apply_proposal(self, nid: str, pid: int) -> dict:
+        return edits.apply(self, nid, pid)
+
+    def undo_proposal(self, nid: str, pid: int) -> dict:
+        return edits.undo(self, nid, pid)
+
+    def dismiss_proposal(self, nid: str, pid: int) -> dict:
+        return edits.dismiss(self, nid, pid)
+
+    def chat_history(self, nid: str, after: int = 0) -> list[dict]:   # replaces the plain version: proposal cards carry their current state
+        self._nb(nid)
+        out = self.store.messages(nid, after)
+        for m in out:
+            if m["kind"] == "proposal" and m["refs"]:
+                p = self.store.get_proposal(m["refs"][0]["id"])
+                if p:
+                    m["proposal"] = edits.view(self.store, p)
+        return out
+
+    def _propose_for_resource(self, nid: str, src: dict, topics: list[str]) -> None:
+        """A newly read resource may extend the course. It is only ever a proposal: nothing changes until the student applies it."""
+        known = " ".join(c["title"].lower() for c in self.store.chapters(nid))
+        new = [t for t in topics if not set(re.findall(r"\w{4,}", t.lower())) & set(re.findall(r"\w{4,}", known))]
+        label = f'"{src["title"][:50]}"'
+        if not topics or not new:
+            self.say(nid, f"{label} fits your current course, so I'm not suggesting any changes.", key=f"fit:{src['id']}")
+            return
+        self.say(nid, f"{label} also covers {', '.join(new[:3])}. Here is a suggestion.", key=f"fit:{src['id']}")
+        request = f"The student added a resource named {src['title'][:60]} covering: {'; '.join(new[:4])}. Propose adding chapters only for what the course does not cover yet."
+        nb = self._nb(nid)
+        edits.propose(self, nid, nb["learner_id"], request, source="resource", resources=[src["title"]])
 
     # ============================================================ added resources
     MAX_RESOURCES = 20
@@ -567,6 +658,11 @@ class Engine:
                 meta = {**meta, "status": "ready", "pages_total": meta.get("pages_total"), "issues": meta.get("issues", [])}
             self.store.set_source_meta(sid, meta)
             self._say_source_read(nid, src, meta, len(got.chunks))
+            if meta.get("status") != "unreadable" and self.store.chapters(nid):
+                try:
+                    self._propose_for_resource(nid, src, [t.title for t in got.topics])
+                except Exception as e:  # noqa: BLE001  a failed suggestion never undoes the reading
+                    log.warning("[aasaan] could not propose course changes for %s: %s", src["id"], e)
 
     # ========================================================= resources view
     def _used_in(self, nid: str, sid: str, chapters: Optional[list] = None, notes_refs: Optional[dict] = None) -> list[dict]:
@@ -909,7 +1005,7 @@ class Engine:
                 "preparing": {"ready": sum(1 for c in chs if c["status"] == "ready"), "total": len(chs),
                               "pct": round(100 * sum(1 for c in chs if c["status"] == "ready") / len(chs)) if chs else 0,
                               "complete": bool(chs) and all(c["status"] == "ready" for c in chs)},
-                "progress": {"done": done, "total": len(chs)}, "message_seq": self.store.last_message_id(nid), "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
+                "progress": {"done": done, "total": len(chs)}, "message_seq": self.store.last_message_id(nid), **edits.snapshot_info(self.store, nid), "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
                 "source_issues": [{"source_id": s["id"], "title": s["title"], "status": s["meta"].get("status", "ready"), "pages_total": s["meta"].get("pages_total"),
                                    "pages_read": s["meta"].get("pages_read"), "issues": s["meta"].get("issues", [])}
                                   for s in self.store.sources(nid) if (s["meta"] or {}).get("issues")],

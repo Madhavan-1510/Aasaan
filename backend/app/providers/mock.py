@@ -131,6 +131,30 @@ class MockProvider(Provider):
     def _critic(self, c: dict) -> dict:
         return {"verdict": "approve", "issues": [], "confidence": 0.9}
 
+    # ---- Editor (demo: understands a few plain phrasings so the proposal flow can be shown offline) -----
+    def _editor(self, c: dict) -> dict:
+        req, n = (c.get("request") or "").lower(), len(c.get("outline") or [])
+        titles = " ".join(x["title"].lower() for x in c.get("outline") or [])
+        ops: list[dict] = []
+        m = re.search(r"covering: (.+?)\. propose", req)
+        if m:                                                    # a resource was added: suggest chapters for topics the course lacks
+            for t in [x.strip() for x in m.group(1).split(";") if x.strip()][:2]:
+                ops.append({"op": "add_chapter", "after": n, "title": t.title()[:80], "summary": f"Covers {t}.", "objectives": [f"Understand {t}"], "minutes": 12})
+            return {"ops": ops}
+        if (m := re.search(r"add (?:a )?chapter (?:on|about) (.+?)(?: after chapter (\d+))?$", req.strip(" .!"))):
+            ops.append({"op": "add_chapter", "after": int(m.group(2)) if m.group(2) else n, "title": m.group(1).strip().title()[:80], "summary": f"Covers {m.group(1).strip()}.",
+                        "objectives": [f"Understand {m.group(1).strip()}"], "minutes": 12})
+        elif (m := re.search(r"(?:remove|delete) chapter (\d+)", req)):
+            ops.append({"op": "remove_chapter", "chapter": int(m.group(1))})
+        elif (m := re.search(r"move chapter (\d+) after (?:chapter )?(\d+)", req)):
+            ops.append({"op": "move_chapter", "chapter": int(m.group(1)), "after": int(m.group(2))})
+        elif (m := re.search(r"(?:rewrite|regenerate|redo) chapter (\d+)(?: (?:with )?(?:a )?focus on (.+))?", req)):
+            ops.append({"op": "regenerate_chapter", "chapter": int(m.group(1)), "focus": (m.group(2) or "").strip()})
+        elif (m := re.search(r"(?:level to|make it) (beginner|intermediate|advanced)", req)):
+            ops.append({"op": "set_level", "level": m.group(1)})
+        _ = titles
+        return {"ops": ops}
+
     # ---- OCR (demo: a scanned page reads as a short sample; a script can return {"empty": true}) -----
     def _ocr(self, c: dict) -> dict:
         return {"text": f"Sample transcription of {c.get('page', 'a page')} (demo mode).", "empty": False}

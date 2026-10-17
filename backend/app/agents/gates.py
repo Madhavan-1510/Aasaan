@@ -176,6 +176,47 @@ def quiz_sanity(router: ModelRouter, quiz: QuizOut, notes_md: str) -> tuple[Quiz
     return QuizOut(questions=keep), [f"quiz_sanity dropped {len(bad)} ambiguous question(s): {', '.join(sorted(bad))}"]
 
 
+# ===================================================================== chat intent
+INTENTS = {"ask_doubt": "a question about the course content or the student's own material",
+           "explain": "asks to explain a chapter or part again, simpler, at a different level, or with another example",
+           "edit_course": "asks to change the course: add, remove, move or rewrite chapters, change the level, focus or track",
+           "add_resource": "wants to add or use a file, link, video or notes they are providing",
+           "quiz_me": "wants to be quizzed or to practise on a chapter",
+           "other": "chit-chat, off-topic, or anything not about their course"}
+INTENT_BUDGET_S = 4.0
+_RULES = [("quiz_me", re.compile(r"\b(quiz me|test me|give me (a )?quiz|practice questions?|quiz on)\b", re.I)),
+          ("edit_course", re.compile(r"\b((add|insert|create|include)\b.*\bchapters?|(remove|delete|drop|skip)\b.*\bchapters?|move\b.*\bchapters?|reorder|rearrange|regenerate|rewrite|redo "
+                                     r"chapter|change (the )?level|make (it|the course) (more |a bit )?(beginner|easier|harder|advanced|intermediate)|focus (more )?on)\b", re.I)),
+          ("add_resource", re.compile(r"\b(add|use|read|include)\b.*\b(this|these|my)\b.*\b(pdf|file|link|video|article|notes|document)\b", re.I)),
+          ("explain", re.compile(r"\b(explain|re-?explain|simpler|in simple|differently|eli5|analogy|another example)\b", re.I))]
+
+
+def route_intent_rules(text: str) -> str:
+    for name, rx in _RULES:
+        if rx.search(text or ""):
+            return name
+    return "ask_doubt"
+
+
+def route_intent(router: ModelRouter, text: str, state: dict) -> dict:
+    """{"intent", "by", "unsure"}: one Choice through the decision chain (student data: never Mercury), bounded so a chat turn never stalls on
+    it, with a keyword rule as the last fallback. A low-confidence answer asks the student one short clarifying question instead of guessing."""
+    ask = lambda: router.decide("intent", state, {"intent": choice("What does the student want with this message?", INTENTS)},  # noqa: E731
+                                student_data=True, summary="chat intent", timeout_s=4)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        ans = pool.submit(ask).result(timeout=INTENT_BUDGET_S)
+    except FutureTimeout:
+        router.note("intent", "fallback", "intent decided by keyword rules", f"no decision within {INTENT_BUDGET_S}s")
+        ans = None
+    finally:
+        pool.shutdown(wait=False)
+    a = (ans or {}).get("intent")
+    if a and a.get("choice") in INTENTS:
+        return {"intent": a["choice"], "by": a.get("_by", "?"), "unsure": bool(a.get("unsure"))}
+    return {"intent": route_intent_rules(text), "by": "rules", "unsure": False}
+
+
 # ====================================================================== input_gate
 def input_gate(router: ModelRouter, goal: str) -> Optional[str]:
     """A friendly refusal message, or None to go ahead. Only blocks when the decision is confident; student data (no Mercury)."""

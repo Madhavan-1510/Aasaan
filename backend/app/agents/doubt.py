@@ -8,7 +8,7 @@ from ..schemas import DoubtOut, LearnerProfile
 from .common import build_prompt, chunk_ids, lang_name, split_sentences
 
 
-def run(router: ModelRouter, question: str, chunks: list[dict], profile: LearnerProfile, notes: str = "") -> RouterResult:
+def run(router: ModelRouter, question: str, chunks: list[dict], profile: LearnerProfile, notes: str = "", style: str = "") -> RouterResult:
     known = chunk_ids(chunks)
     ctx = {"question": question, "chunks": chunks, "language": profile.language, "notes": notes}
 
@@ -33,7 +33,9 @@ def run(router: ModelRouter, question: str, chunks: list[dict], profile: Learner
 
     example = {"answer": "Short answer", "source_refs": ["<chunk id>"]}
     prompt = build_prompt(
-        "You are a tutor answering a student's doubt. Answer in 2-3 short sentences using ONLY the source chunks and chapter notes; "
+        "You are a tutor answering a student's doubt. " + ("The student wants it EXPLAINED AGAIN: use plain words, one concrete example or analogy taken from the material, "
+                                                           "at most 5 short sentences. " if style == "explain" else "") +
+        "Answer in 2-3 short sentences using ONLY the source chunks and chapter notes; "
         "if they do not cover it, say so. Give a hint before a full answer when it looks like a homework question. "
         f"Write the answer in {lang_name(profile.language)}.",
         example, {"question": question, "source_chunks": [{"id": c["chunk_id"], "text": c["text"]} for c in chunks],

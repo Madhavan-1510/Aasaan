@@ -219,7 +219,7 @@ async function workspace(nid, cid) {
     nid, learner: S.learner, api, toast, getChapterId: () => S.chapter?.id || null, getSources: () => S.nb?.sources || [],
     isOpen: () => !S.panes.closed() || matchMedia("(max-width: 860px)").matches && document.getElementById("ws")?.dataset.tab === "chat",
     notifyUnread: () => { document.getElementById("chatdot").hidden = false; document.getElementById("tabdot").hidden = false; },
-    openChat: () => S.panes.open(), onChip: chatChip, wireMic: (btn, onText) => wireMic(btn, onText, () => lang()),
+    openChat: () => S.panes.open(), onChip: chatChip, afterEdit: () => api("notebooks/" + nid).then(onSnapshot).catch(() => {}), wireMic: (btn, onText) => wireMic(btn, onText, () => lang()),
   });
   api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; renderNote(); }).catch(() => {});
   connect(nid);
@@ -299,10 +299,22 @@ function wirePanes(nid) {
   apply();
 }
 
+// after Apply or Undo: the affected chapters glow in the roadmap for about two seconds (not at all with reduced motion)
+function flashEdits(nb) {
+  const h = nb.highlight; if (!h || h.key === S.lastHl) return;
+  S.lastHl = h.key;
+  requestAnimationFrame(() => {
+    h.ids.forEach((id) => { const el = document.querySelector(`.rm[data-id="${id}"], .gnode[data-id="${id}"]`); if (el) { el.classList.add("flashrow"); setTimeout(() => el.classList.remove("flashrow"), 2200); } });
+  });
+}
+
 function chatChip(c) {
   const ws = document.getElementById("ws");
   if (matchMedia("(max-width: 860px)").matches) document.querySelector('#tabbar [data-tab="course"]').click();
-  if (c.kind === "chapter") { document.getElementById("vt-course").click(); loadChapter(Number(c.id), false, false); }
+  if (c.kind === "chapter") {
+    document.getElementById("vt-course").click();
+    loadChapter(Number(c.id), false, false).then(() => { if (c.quiz) document.getElementById("quizblk")?.scrollIntoView({ block: "center", behavior: "smooth" }); });
+  }
   else if (c.kind === "resource") {
     document.getElementById("vt-res").click();
     S.res.refresh(true).then(() => {
@@ -326,7 +338,9 @@ function onSnapshot(nb) {
   const cur = S.chapter, hadChapters = !!(S.nb && S.nb.chapters.length);
   S.nb = nb; renderHead(); renderSide(); S.chat?.onSnapshot(nb); S.res?.onSnapshot();
   if (!S.chapter || !hadChapters || nb.status === "failed") settleCourse();
+  flashEdits(nb);
   const now = cur && nb.chapters.find((c) => c.id === cur.id);
+  if (cur && !now) { S.chapter = null; settleCourse(); return; }   // the chapter being read was removed (or an add was undone)
   if (!now) return;
   const becameReady = cur.status !== "ready" && now.status === "ready";
   const statusChanged = cur.status !== now.status && now.status !== "ready";

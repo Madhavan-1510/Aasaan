@@ -45,7 +45,7 @@ log = logging.getLogger("aasaan.router")
 NON_MODEL_STEPS = {
     "text_only", "linear_path", "cached_lesson", "rule_checks", "cached_questions",
     "exact_match", "insert_review_step", "template_message", "text_only_mode", "no_audio",
-    "template_answer", "search_order", "deterministic_only",
+    "template_answer", "search_order", "deterministic_only", "no_change",
 }
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "models.yaml"
