@@ -503,6 +503,13 @@ class Engine:
             if not ok:
                 raise UserError(f"I can't open that link: {why}")
 
+    def add_pasted_text(self, nid: str, text: str) -> dict:
+        self._nb(nid)
+        if len(self.store.sources(nid)) >= self.MAX_RESOURCES:
+            raise UserError(f"A notebook can hold up to {self.MAX_RESOURCES} resources.")
+        sid = self.store.add_source(nid, "text", "pasted", "Pasted notes", text[:200_000], [])
+        return self._queue_resource(nid, sid, "text", "Pasted notes", len(text))
+
     def add_resources(self, nid: str, files: list[tuple[str, str, bytes]], urls: list[str]) -> list[dict]:
         """Chat or Resources view: new files and links become sources and are read in the background. The course is NOT changed here."""
         self.validate_resources(nid, files, urls)
@@ -560,6 +567,130 @@ class Engine:
                 meta = {**meta, "status": "ready", "pages_total": meta.get("pages_total"), "issues": meta.get("issues", [])}
             self.store.set_source_meta(sid, meta)
             self._say_source_read(nid, src, meta, len(got.chunks))
+
+    # ========================================================= resources view
+    def _used_in(self, nid: str, sid: str, chapters: Optional[list] = None, notes_refs: Optional[dict] = None) -> list[dict]:
+        """Chapters that cite this source (their outline refs or the refs the notes were written from)."""
+        out = []
+        for ch in chapters if chapters is not None else self.store.chapters(nid):
+            refs = list(ch.get("source_refs") or []) + list((notes_refs or {}).get(ch["id"], []))
+            if any(str(r).startswith(sid + "-") for r in refs):
+                out.append({"id": ch["id"], "position": ch["position"], "title": ch["title"][:60]})
+        return out
+
+    def _notes_refs(self, chs: list[dict]) -> dict:
+        out = {}
+        for ch in chs:
+            if ch["status"] == "ready":
+                nb_ = next((b for b in self.store.blocks(ch["id"]) if b["type"] == "notes"), None)
+                out[ch["id"]] = list(((nb_ or {}).get("meta") or {}).get("refs", []))
+        return out
+
+    @staticmethod
+    def _summary_of(src: dict) -> str:
+        """A short, plain description of what we read (our own words are not needed: this is the start of their text, trimmed)."""
+        text = (src.get("extracted_text") or " ".join(c.get("text", "") for c in src.get("chunks", [])[:3]) or "").strip()
+        text = re.sub(r"\s+", " ", text)
+        return (text[:170].rsplit(" ", 1)[0] + "…") if len(text) > 170 else text
+
+    def resources_view(self, nid: str) -> dict:
+        """Everything the student gave (files, links, pasted text) and everything Aasaan found for the chapters, with statuses."""
+        self._nb(nid)
+        chs = self.store.chapters(nid)
+        notes_refs = self._notes_refs(chs)
+        mine = []
+        for s in self.store.sources(nid):
+            meta = s.get("meta") or {}
+            kind = s["kind"]
+            size = meta.get("size") or len(s.get("extracted_text") or "") if kind == "text" else meta.get("size", 0)
+            mine.append({"id": s["id"], "kind": "pasted" if (kind == "text" and s["raw_ref"] == "pasted") else kind, "title": s["title"],
+                         "url": s["raw_ref"] if kind == "url" else "", "size": size, "status": meta.get("status", "ready"),
+                         "pages_total": meta.get("pages_total"), "pages_read": meta.get("pages_read"), "issues": meta.get("issues", []),
+                         "length": len(s.get("extracted_text") or "") if kind == "text" else None,
+                         "summary": self._summary_of(s), "has_file": kind in ("pdf", "image") and bool(s["raw_ref"]),
+                         "used_in": self._used_in(nid, s["id"], chs, notes_refs)})
+        found: dict[str, dict] = {}
+        for ch in chs:
+            if ch["status"] != "ready":
+                continue
+            for b in self.store.blocks(ch["id"]):
+                c = b["content"]
+                if b["type"] == "video":
+                    key, item = "video:" + c.get("video_id", ""), {"kind": "video", "title": c.get("title", ""), "source": c.get("channel", "YouTube"), "url": c.get("url", ""), "license": "", "author": ""}
+                elif b["type"] == "link":
+                    key, item = "link:" + c.get("url", ""), {"kind": "article", "title": c.get("title", ""), "source": c.get("source", ""), "url": c.get("url", ""), "license": "", "author": ""}
+                elif b["type"] == "image":
+                    a = c.get("attribution", {})
+                    key, item = "image:" + c.get("url", ""), {"kind": "image", "title": c.get("title", ""), "source": a.get("source", ""), "url": a.get("page_url") or c.get("url", ""), "thumb": c.get("url", ""),
+                                                            "license": a.get("license", ""), "author": a.get("author", "")}
+                elif b["type"] == "visual" and c.get("kind") == "figure":
+                    a = c.get("attribution") or {}
+                    key, item = "fig:" + (c.get("payload") or {}).get("url", ""), {"kind": "image", "title": c.get("caption", ""), "source": a.get("source", ""), "url": a.get("page_url", ""),
+                                                                                  "thumb": (c.get("payload") or {}).get("url", ""), "license": a.get("license", ""), "author": a.get("author", "")}
+                else:
+                    continue
+                cur = found.setdefault(key, {**item, "used_in": []})
+                cur["used_in"].append({"id": ch["id"], "position": ch["position"], "title": ch["title"][:60]})
+        return {"mine": mine, "found": list(found.values())}
+
+    def resource_impact(self, nid: str, sid: str) -> dict:
+        chs = self.store.chapters(nid)
+        return {"cited_by": self._used_in(nid, sid, chs, self._notes_refs(chs))}
+
+    def _source_or_404(self, nid: str, sid: str) -> dict:
+        src = next((s for s in self.store.sources(nid) if s["id"] == sid), None)
+        if not src:
+            raise UserError("unknown resource")
+        return src
+
+    def remove_resource(self, nid: str, sid: str, regenerate: bool = False) -> dict:
+        """Remove a source. The chapters that cite it keep their text; with `regenerate` they are rebuilt without it."""
+        src = self._source_or_404(nid, sid)
+        impact = self.resource_impact(nid, sid)["cited_by"]
+        self.store.delete_source(sid)
+        if src["kind"] in ("pdf", "image") and src["raw_ref"]:
+            try:
+                Path(src["raw_ref"]).unlink(missing_ok=True)
+            except OSError:
+                pass
+        for c in impact:
+            ch = self._chapter(c["id"])
+            self.store.update_chapter(c["id"], summary=ch["summary"])
+            self.store.set_chapter_refs(c["id"], [r for r in ch.get("source_refs", []) if not str(r).startswith(sid + "-")])
+            if regenerate:
+                self.store.set_chapter_status(c["id"], "queued")
+                self.store.update_chapter(c["id"], priority=60)
+                self.store.add_job(nid, c["id"], "chapter")
+        self.say(nid, f"Removed \"{src['title'][:50]}\"." + (f" Rebuilding {len(impact)} chapter{'s' if len(impact) != 1 else ''} without it." if regenerate and impact else ""),
+                 key=f"removed:{sid}")
+        return {"removed": sid, "regenerating": [c["id"] for c in impact] if regenerate else []}
+
+    def reprocess_resource(self, nid: str, sid: str) -> dict:
+        src = self._source_or_404(nid, sid)
+        self.store.set_source_meta(sid, {"status": "reading", "size": (src.get("meta") or {}).get("size", 0)})
+        self.store.add_job(nid, None, "resource", {"source_id": sid})
+        self.say(nid, f"Reading \"{src['title'][:50]}\" again.", key=f"re:{sid}:{self.store.last_message_id(nid)}")
+        return {"id": sid, "status": "reading"}
+
+    def resource_file(self, nid: str, sid: str) -> Path:
+        src = self._source_or_404(nid, sid)
+        p = Path(src["raw_ref"]).resolve()
+        if src["kind"] not in ("pdf", "image") or not p.is_file() or self.upload_dir.resolve() not in p.parents:
+            raise UserError("no file for this resource")
+        return p
+
+    def resource_thumb(self, nid: str, sid: str) -> Optional[bytes]:
+        """PNG thumbnail: the image itself, or the first page of a PDF (needs pypdfium2; None when unavailable)."""
+        src = self._source_or_404(nid, sid)
+        p = self.resource_file(nid, sid)
+        if src["kind"] == "image":
+            return p.read_bytes()
+        return intake.render_page_png(p.read_bytes(), 1, scale=0.5)
+
+    def resource_preview(self, nid: str, sid: str) -> dict:
+        src = self._source_or_404(nid, sid)
+        text = src.get("extracted_text") or "\n\n".join(c.get("text", "") for c in src.get("chunks", [])[:6])
+        return {"id": sid, "title": src["title"], "kind": src["kind"], "text": text[:4000], "truncated": len(text) > 4000}
 
     # ============================================================== chapters
     def build_chapter(self, cid: int) -> None:

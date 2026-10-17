@@ -252,16 +252,58 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
     def messages(nid: str, after: int = 0):
         return {"messages": engine.chat_history(nid, after)}
 
+    @app.get("/api/notebooks/{nid}/resources")
+    def resources(nid: str):
+        return engine.resources_view(nid)
+
     @app.post("/api/notebooks/{nid}/resources")
-    async def add_resources(nid: str, files: list[UploadFile] = File(default=[]), urls: str = Form("")):
+    async def add_resources(nid: str, files: list[UploadFile] = File(default=[]), urls: str = Form(""), text: str = Form("")):
         data = [(f.filename or "file", f.content_type or "", await f.read()) for f in files if f is not None and f.filename]
         link_list = [u for u in urls.split() if u.startswith(("http://", "https://"))]
-        if not (data or link_list):
-            raise HTTPException(400, "Add a file or a link.")
+        if not (data or link_list or text.strip()):
+            raise HTTPException(400, "Add a file, a link or some text.")
         try:
-            return {"resources": await run_in_threadpool(engine.add_resources, nid, data, link_list)}
+            out = await run_in_threadpool(engine.add_resources, nid, data, link_list) if (data or link_list) else []
+            if text.strip():
+                out.append(await run_in_threadpool(engine.add_pasted_text, nid, text.strip()))
+            return {"resources": out}
         except UserError as e:
             raise HTTPException(400, str(e))
+
+    def _res_guard(fn, *a):
+        try:
+            return fn(*a)
+        except UserError as e:
+            raise HTTPException(404, str(e))
+
+    @app.get("/api/notebooks/{nid}/resources/{sid}/impact")
+    def resource_impact(nid: str, sid: str):
+        return _res_guard(engine.resource_impact, nid, sid)
+
+    @app.get("/api/notebooks/{nid}/resources/{sid}/preview")
+    def resource_preview(nid: str, sid: str):
+        return _res_guard(engine.resource_preview, nid, sid)
+
+    @app.get("/api/notebooks/{nid}/resources/{sid}/file")
+    def resource_file(nid: str, sid: str):
+        p = _res_guard(engine.resource_file, nid, sid)
+        return FileResponse(p, headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"})
+
+    @app.get("/api/notebooks/{nid}/resources/{sid}/thumb")
+    def resource_thumb(nid: str, sid: str):
+        from fastapi.responses import Response
+        png = _res_guard(engine.resource_thumb, nid, sid)
+        if not png:
+            raise HTTPException(404, "no thumbnail")
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
+
+    @app.post("/api/notebooks/{nid}/resources/{sid}/reprocess")
+    def resource_reprocess(nid: str, sid: str):
+        return _res_guard(engine.reprocess_resource, nid, sid)
+
+    @app.delete("/api/notebooks/{nid}/resources/{sid}")
+    def resource_remove(nid: str, sid: str, regenerate: bool = False):
+        return _res_guard(engine.remove_resource, nid, sid, regenerate)
 
     @app.post("/api/notebooks/{nid}/chat")
     async def chat(nid: str, learner_id: str = Form(...), text: str = Form(""), chapter_id: Optional[int] = Form(None), block_ids: str = Form(""),

@@ -3,6 +3,7 @@ import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, the
 import { renderMarkdown } from "./markdown.js";
 import { renderGraph, legend } from "./graph.js";
 import { createChat } from "./chat.js";
+import { createResources } from "./resources.js";
 
 const $app = document.getElementById("app");
 const $bar = document.getElementById("bar");
@@ -183,7 +184,7 @@ async function workspace(nid, cid) {
       </div>
       <div id="courseview">
         <div class="nbhead"><div class="cover" id="cover"></div><div><h1 id="nbtitle"><span class="bar-s w60"></span></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
-        <div id="srcnote"></div><div id="note"></div>
+        <div id="note"></div>
         <div class="nb"><button class="chaps-toggle" id="chaps" aria-expanded="false">${ICON.list} Chapters</button>
           <aside class="side" id="side" aria-label="Chapters"></aside><section class="main" id="main" aria-live="polite"></section></div>
       </div>
@@ -211,7 +212,9 @@ async function workspace(nid, cid) {
   document.getElementById("chaps").onclick = (e) => { const o = document.querySelector(".nb").classList.toggle("side-open"); e.currentTarget.setAttribute("aria-expanded", o); };
   paintShell();
   try { S.nb = await api("notebooks/" + nid); } catch (e) { fail(e); location.hash = "#/"; return; }
-  renderHead(); renderSide(); renderResources(); settleCourse(cid);
+  renderHead(); renderSide(); settleCourse(cid);
+  S.res = createResources({ nid, api, toast, openChapter: (id) => { document.getElementById("vt-course").click(); loadChapter(id, false, false); }, isVisible: () => !document.getElementById("resview").hidden });
+  S.res.refresh(true);
   S.chat = createChat({
     nid, learner: S.learner, api, toast, getChapterId: () => S.chapter?.id || null, getSources: () => S.nb?.sources || [],
     isOpen: () => !S.panes.closed() || matchMedia("(max-width: 860px)").matches && document.getElementById("ws")?.dataset.tab === "chat",
@@ -281,9 +284,10 @@ function wirePanes(nid) {
   const view = (v) => {
     ws.dataset.view = v; store.set("view:" + nid, v);
     document.getElementById("courseview").hidden = v !== "course"; document.getElementById("resview").hidden = v !== "resources";
-    document.getElementById("vt-course").setAttribute("aria-selected", String(v === "course")); document.getElementById("vt-res").setAttribute("aria-selected", String(v === "resources"));
+    document.getElementById("vt-course").setAttribute("aria-selected", String(v === "course"));
+    if (v === "resources") S.res?.refresh(true); document.getElementById("vt-res").setAttribute("aria-selected", String(v === "resources"));
   };
-  document.getElementById("vt-course").onclick = () => view("course"); document.getElementById("vt-res").onclick = () => view("resources");
+  document.getElementById("vt-course").onclick = () => view("course"); document.getElementById("vt-res").onclick = () => { view("resources"); S.res?.refresh(true); };
   view(ws.dataset.view === "resources" ? "resources" : "course");
   // phones: one pane at a time
   document.querySelectorAll("#tabbar button").forEach((b) => b.onclick = () => {
@@ -295,25 +299,16 @@ function wirePanes(nid) {
   apply();
 }
 
-// Resources view (basic list for now: what the student gave)
-function renderResources() {
-  const el = document.getElementById("resview"); if (!el || !S.nb) return;
-  const src = S.nb.sources || [];
-  const kind = { text: "Pasted text", url: "Link", pdf: "PDF", image: "Image" };
-  el.innerHTML = `<h2 class="res-h">Resources</h2>` + (src.length ? `<ul class="reslist">${src.map((s) => `<li class="resitem" data-rid="${esc(s.id)}"><span class="rk">${kind[s.kind] || s.kind}</span>
-    <span class="rn">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</span>
-    <span class="muted">${s.status === "partly_readable" ? "Partly readable" : s.status === "unreadable" ? "Unreadable" : "Ready"}</span></li>`).join("")}</ul>`
-    : `<p class="muted">Nothing here yet. Resources you add, and sources Aasaan finds, appear in this view.</p>`);
-}
-
 function chatChip(c) {
   const ws = document.getElementById("ws");
   if (matchMedia("(max-width: 860px)").matches) document.querySelector('#tabbar [data-tab="course"]').click();
   if (c.kind === "chapter") { document.getElementById("vt-course").click(); loadChapter(Number(c.id), false, false); }
   else if (c.kind === "resource") {
     document.getElementById("vt-res").click();
-    const item = document.querySelector(`[data-rid="${c.id}"]`);
-    if (item) { item.scrollIntoView({ block: "center", behavior: "smooth" }); item.classList.add("flash"); setTimeout(() => item.classList.remove("flash"), 2200); }
+    S.res.refresh(true).then(() => {
+      const item = document.querySelector(`#resview [data-rid="${c.id}"]`);
+      if (item) { item.scrollIntoView({ block: "center", behavior: "smooth" }); item.classList.add("flash"); setTimeout(() => item.classList.remove("flash"), 2200); }
+    });
   } else if (c.kind === "link" && c.url) window.open(c.url, "_blank", "noopener");
 }
 
@@ -329,7 +324,7 @@ function connect(nid) {
 
 function onSnapshot(nb) {
   const cur = S.chapter, hadChapters = !!(S.nb && S.nb.chapters.length);
-  S.nb = nb; renderHead(); renderSide(); renderResources(); S.chat?.onSnapshot(nb);
+  S.nb = nb; renderHead(); renderSide(); S.chat?.onSnapshot(nb); S.res?.onSnapshot();
   if (!S.chapter || !hadChapters || nb.status === "failed") settleCourse();
   const now = cur && nb.chapters.find((c) => c.id === cur.id);
   if (!now) return;
@@ -356,7 +351,7 @@ function renderHead() {
   document.getElementById("nbdesc").innerHTML = esc(nb.description || "") + ((nb.sources || []).length
     ? `<span class="srcs">Based on: ${nb.sources.map((x) => x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc((x.title || x.url).slice(0, 40))}</a>` : `<span>${esc(x.title.slice(0, 40))}</span>`).join(" · ")}</span>` : "")
     + ((nb.warnings || []).length ? `<span class="srcs">${nb.warnings.map(esc).join(" · ")}</span>` : "");
-  renderSourceNotice();
+
   const yp = nb.your_progress, pr = nb.preparing;
   document.getElementById("ready").innerHTML = `<span>Your progress</span>
     <div class="meter" role="progressbar" aria-label="Your progress" aria-valuenow="${yp.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${yp.pct}%"></i></div>
@@ -364,21 +359,6 @@ function renderHead() {
     ${pr.complete ? "" : `<span class="prep">Preparing your notebook</span>
     <div class="meter prep" role="progressbar" aria-label="Preparing your notebook" aria-valuenow="${pr.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pr.pct}%"></i></div>
     <span class="muted">${pr.ready} of ${pr.total} chapters ready</span>`}`;
-}
-
-function renderSourceNotice() {
-  const el = document.getElementById("srcnote"); if (!el) return;
-  const list = S.nb.source_issues || [];
-  el.innerHTML = list.map((s) => {
-    const total = s.issues.reduce((n, i) => n + i.pages.length, 0);
-    const kinds = s.issues.map((i) => i.kind);
-    const head = kinds.every((k) => k === "drawing_only" || k === "blank" || k === "over_limit")
-      ? `${total} page${total === 1 ? "" : "s"} of ${esc(s.title)} ${total === 1 ? "has" : "have"} no text to read.` : `${total} page${total === 1 ? "" : "s"} of ${esc(s.title)} couldn't be read.`;
-    const read = s.pages_total ? ` ${s.pages_read} of ${s.pages_total} pages were read.` : "";
-    const rng = (p) => p.length > 6 ? `${p[0]} to ${p[p.length - 1]} (${p.length} pages)` : p.join(", ");
-    return `<details class="calm"><summary>${head}${read}</summary>${s.issues.map((i) => `<p><strong>Pages ${rng(i.pages)}.</strong> ${esc(i.reason)}</p>`).join("")}
-      ${kinds.includes("failed") ? `<p class="muted">Attach clearer photos or a better scan of those pages and Aasaan will read them.</p>` : ""}</details>`;
-  }).join("");
 }
 
 function chip(c) {

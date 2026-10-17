@@ -166,6 +166,12 @@ class Store:
     def update_source_chunks(self, sid: str, chunks: list[dict]) -> None:
         self._run("UPDATE sources SET chunks=? WHERE id=?", (_j(chunks), sid))
 
+    def delete_source(self, sid: str) -> None:
+        self._run("DELETE FROM sources WHERE id=?", (sid,))
+
+    def set_chapter_refs(self, cid: int, refs: list) -> None:
+        self._run("UPDATE chapters SET source_refs=? WHERE id=?", (_j(refs), cid))
+
     def set_source_meta(self, sid: str, meta: dict) -> None:
         self._run("UPDATE sources SET meta=? WHERE id=?", (_j(meta), sid))
 
