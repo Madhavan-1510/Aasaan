@@ -64,6 +64,13 @@ def split_request(text: str) -> tuple[Optional[str], str, list[str]]:
     return (rest or None), "", urls
 
 
+def search_topic(nb: dict) -> str:
+    """Short subject for web searches. A long personal goal ("I'm part of the training for ... i need a roadmap") would poison
+    every query, so past a short single line the notebook title (the Architect's name for the subject) is used instead."""
+    goal = (nb.get("goal") or "").strip()
+    return goal if goal and len(goal) <= 60 and "\n" not in goal else (nb.get("title") or goal)[:60]
+
+
 class Engine:
     def __init__(self, store: Store, router: ModelRouter, upload_dir: str | Path = "data/uploads",
                  retry_delay_s: float = 4.0, tools: Optional[ToolRunner] = None):
@@ -296,7 +303,7 @@ class Engine:
         all_chunks = self._all_chunks(nb["id"])
         own = self._chapter_chunks(ch, all_chunks)
 
-        res = curator.curate(self.router, self.store, ch["title"], ch["objectives"], nb["goal"] or nb["title"], nb["language"])
+        res = curator.curate(self.router, self.store, ch["title"], ch["objectives"], search_topic(nb), nb["language"])
         page_chunks = [{"chunk_id": p["chunk_id"], "page": 1, "text": p["text"], "source_id": "web"} for p in res.pages]
         chunks = own + page_chunks
         link_refs = [{"ref": f"url:{c.url}", "title": c.title, "source": c.source, "kind": c.kind} for c in res.links + res.videos]

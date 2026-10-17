@@ -133,3 +133,9 @@ def test_grounded_redirect_that_lands_on_youtube_becomes_a_verified_video(live, 
     fake_web.get(lambda u, p: FakeResp(200, data={"title": "Binary Search", "author_name": "CS"}) if u == "https://www.youtube.com/oembed" else None)
     out = curator.curate(live, store, "Binary search", ["x"], "algorithms")
     assert [v.extra["video_id"] for v in out.videos] == ["dQw4w9WgXcQ"] and out.links == []
+
+
+def test_search_goal_drops_notebook_words_that_pull_in_generic_videos():
+    from app.agents.curator import search_goal
+    assert search_goal("Cloud Data Engineering Roadmap") == "Cloud Data Engineering"
+    assert search_goal("Python course for beginners") == "Python for beginners"

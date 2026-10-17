@@ -431,3 +431,10 @@ def test_quiz_is_written_while_the_critic_checks_and_matches_the_final_draft(eng
     assert len(quiz_keys(store, cid)) >= 3 and store.get_chapter(cid)["meta"]["revisions"] == 1
     roles = [r for r, _ in engine.router.mock.calls]
     assert roles.count("quizzer") == 2 and roles.count("teacher") == 2  # one quiz per draft
+
+
+def test_search_topic_never_uses_a_long_personal_goal():
+    from app.engine import search_topic
+    assert search_topic({"goal": "Learn DSA", "title": "Data Structures"}) == "Learn DSA"
+    long = "I'm part of the training for HCL - this is the syllabus given to us, i need a clean roadmap\r\n\r\nbest resources please"
+    assert search_topic({"goal": long, "title": "Cloud Data Engineering Roadmap"}) == "Cloud Data Engineering Roadmap"

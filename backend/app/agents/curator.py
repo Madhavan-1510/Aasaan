@@ -100,10 +100,19 @@ def gate(router: ModelRouter, chapter_title: str, objectives: list[str], cands: 
     return [by_id[i] for i in res.value.relevant]
 
 
+META_WORDS = re.compile(r"\b(roadmap|syllabus|course|curriculum|learning path|learn|guide|training|notes|chapter|lesson|plan)\b", re.I)
+
+
+def search_goal(goal: str) -> str:
+    """Words that describe the notebook, not the subject ("Roadmap", "Course"), pull in generic videos: drop them from searches."""
+    return re.sub(r"\s+", " ", META_WORDS.sub(" ", goal or "")).strip()
+
+
 def curate(router: ModelRouter, store, chapter_title: str, objectives: list[str], goal: str = "",
            language: str = "en", max_pages: int = 2) -> Curated:
     """Discovery -> verification (code) -> relevance gate -> capped, ordered results."""
     out = Curated()
+    goal = search_goal(goal)
     query = f"{chapter_title} {goal}".strip()[:120]
     gem = router.cfg["models"]["gemma_26b"]["id"]
     live = router.mode == "live"
@@ -118,7 +127,7 @@ def curate(router: ModelRouter, store, chapter_title: str, objectives: list[str]
     with ThreadPoolExecutor(max_workers=5) as pool:
         futs = {"wiki": pool.submit(web.discover_wikipedia, chapter_title),
                 "grounded": pool.submit(grounded),
-                "youtube": pool.submit(web.discover_youtube, query),
+                "youtube": pool.submit(web.discover_youtube, f"{chapter_title} {goal}".strip()[:100] + " tutorial"),
                 "images": pool.submit(web.discover_images, chapter_title if len(chapter_title) > 3 else goal)}
         found = {k: f.result() for k, f in futs.items()}
     topic = topic_tokens(f"{chapter_title} {goal}")
