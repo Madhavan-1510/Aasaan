@@ -53,10 +53,10 @@ async function init() {
 
 function route() {
   cleanup();
+  document.body.classList.toggle("ws-open", /^#\/(?:n|nb|loading)\//.test(location.hash));
   const h = location.hash;
   let m;
-  if ((m = h.match(/^#\/loading\/(\w+)/))) return loading(m[1]);
-  if ((m = h.match(/^#\/nb\/(\w+)(?:\/ch\/(\d+))?/))) return notebook(m[1], m[2] ? Number(m[2]) : null);
+  if ((m = h.match(/^#\/(?:n|nb|loading)\/(\w+)(?:\/ch\/(\d+))?/))) return workspace(m[1], m[2] ? Number(m[2]) : null);
   return home();
 }
 
@@ -85,7 +85,7 @@ async function home() {
     ${nbs.length ? `<h2 class="section">Notebooks</h2><div class="grid">${nbs.map(nbCard).join("")}</div>` : ""}`;
   wireComposer();
   document.querySelectorAll(".nb-card").forEach((b) => b.onclick = () => {
-    location.hash = b.dataset.ready === "1" ? `#/nb/${b.dataset.id}` : `#/loading/${b.dataset.id}`;
+    location.hash = `#/n/${b.dataset.id}`;
   });
 }
 
@@ -138,7 +138,7 @@ function wireComposer() {
     try {
       const r = await api("notebooks", null, f);
       S.files = [];
-      location.hash = `#/loading/${r.notebook_id}`;
+      location.hash = `#/n/${r.notebook_id}`;
     } catch (e) { document.getElementById("err").textContent = e.message; send.disabled = false; }
   }
 }
@@ -164,48 +164,130 @@ function wireMic(btn, onText, getLang) {
   };
 }
 
-// ---------------------------------------------------------------------- loading
-function loading(nid) {
-  topbar();
-  $app.className = "";
-  const dots = Array.from({ length: 9 }, (_, i) => `<i style="--i:${i}"></i>`).join("");
-  $app.innerHTML = `<div class="loading"><div class="dots" aria-hidden="true">${dots}</div>
-    <h1>Preparing your notebook</h1><p class="muted" id="lmsg" role="status"></p><div id="lact"></div></div>`;
-  const msgs = ["Reading what you gave me...", "Planning the chapters...", "Writing the first chapter..."];
-  let n = 0;
-  const tick = async () => {
-    let nb;
-    try { nb = await api("notebooks/" + nid); } catch (e) { cleanup(); return fail(e); }
-    if (nb.open_ready) { cleanup(); location.hash = `#/nb/${nid}`; return; }
-    const msg = document.getElementById("lmsg"); if (!msg) return;
-    if (nb.status === "failed") {
-      cleanup(); document.querySelector(".dots")?.remove(); msg.textContent = nb.error || "Something went wrong while preparing your notebook.";
-      document.getElementById("lact").innerHTML = `<button class="btn" id="retry">Try again</button> <a class="btn ghost" href="#/">Back home</a>`;
-      document.getElementById("retry").onclick = async () => { try { await api(`notebooks/${nid}/retry`, {}); loading(nid); } catch (e) { fail(e); } };
-      return;
-    }
-    msg.textContent = nb.chapters.length ? `${nb.chapters.length} chapters planned. Writing the first one...` : msgs[n++ % msgs.length];
-  };
-  tick(); S.poll = setInterval(tick, 1200);
-}
+// -------------------------------------------------------------------- workspace
+// After submit the student lands here at once: Course on the left (the whiteboard: it fills in live), chat on the right.
+const WS_DEFAULT = { w: 65, closed: false };
+const wsPrefs = (nid) => { try { return { ...WS_DEFAULT, ...JSON.parse(store.get("ws:" + nid) || "{}") }; } catch { return { ...WS_DEFAULT }; } };
+const wsSave = (nid, p) => store.set("ws:" + nid, JSON.stringify(p));   // UI preference only: pane width and collapsed state
 
-// --------------------------------------------------------------------- notebook
-async function notebook(nid, cid) {
-  $app.className = "wide";
+async function workspace(nid, cid) {
+  S.nb = null; S.chapter = null; S.quiz = null; S.nid = nid;
+  $app.className = "ws-host";
   topbar(`<button class="linkbtn" id="finish">Finish for today</button>`);
-  $app.innerHTML = `<div class="nbhead"><div class="cover" id="cover" aria-hidden="false"></div><div><h1 id="nbtitle"></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
-    <div id="srcnote"></div>
-    <div id="note"></div>
-    <div class="nb"><button class="chaps-toggle" id="chaps" aria-expanded="false">${ICON.list} Chapters</button>
-      <aside class="side" id="side" aria-label="Chapters"></aside><section class="main" id="main" aria-live="polite"></section></div>`;
+  const prefs = wsPrefs(nid);
+  $app.innerHTML = `<div class="ws" id="ws" data-tab="course" data-view="${store.get("view:" + nid) || "course"}">
+    <section class="board" id="board" aria-label="Course">
+      <div class="board-top">
+        <div class="vseg" role="tablist" aria-label="Whiteboard view"><button role="tab" id="vt-course" aria-selected="true">Course</button><button role="tab" id="vt-res" aria-selected="false">Resources</button></div>
+      </div>
+      <div id="courseview">
+        <div class="nbhead"><div class="cover" id="cover"></div><div><h1 id="nbtitle"><span class="bar-s w60"></span></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
+        <div id="srcnote"></div><div id="note"></div>
+        <div class="nb"><button class="chaps-toggle" id="chaps" aria-expanded="false">${ICON.list} Chapters</button>
+          <aside class="side" id="side" aria-label="Chapters"></aside><section class="main" id="main" aria-live="polite"></section></div>
+      </div>
+      <div id="resview" hidden></div>
+    </section>
+    <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize the chat panel" tabindex="0" aria-valuemin="30" aria-valuemax="80" aria-valuenow="${prefs.w}"></div>
+    <aside class="chatpane" id="chatpane" aria-label="Chat with Aasaan">
+      <header class="chat-h"><span class="chat-name">${ICON.logo} Aasaan</span>
+        <button class="iconbtn" id="dissolve" aria-label="Hide chat" aria-keyshortcuts="Control+." title="Hide chat (Ctrl+.)">${ICON.right}</button></header>
+      <div class="msgs" id="msgs" role="log" aria-live="polite"></div>
+    </aside>
+    <button class="chatfab" id="chatfab" aria-label="Open chat" aria-keyshortcuts="Control+." title="Open chat (Ctrl+.)"><span>${ICON.logo}</span><i class="dot" id="chatdot" hidden></i></button>
+    <nav class="tabbar" id="tabbar" aria-label="Sections"><button data-tab="course" aria-current="true">Course</button><button data-tab="resources">Resources</button><button data-tab="chat">Chat</button></nav>
+  </div>`;
+  wirePanes(nid);
   document.getElementById("finish").onclick = finishSession;
   document.getElementById("chaps").onclick = (e) => { const o = document.querySelector(".nb").classList.toggle("side-open"); e.currentTarget.setAttribute("aria-expanded", o); };
+  paintShell();
+  document.getElementById("msgs").innerHTML = `<div class="msg sys">Your course is being built on the left. You can read each chapter as soon as it appears.</div>`;
   try { S.nb = await api("notebooks/" + nid); } catch (e) { fail(e); location.hash = "#/"; return; }
-  renderHead(); renderSide();
+  renderHead(); renderSide(); renderResources(); settleCourse(cid);
   api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; renderNote(); }).catch(() => {});
-  const first = cid || S.nb.next_chapter || S.nb.chapters[0]?.id;
-  if (first) await loadChapter(first, false, true);
   connect(nid);
+}
+
+// what the board shows before the outline exists: placeholders, never a blank page
+function paintShell() {
+  document.getElementById("side").innerHTML = `<div class="seg" aria-hidden="true"><button aria-selected="true">Roadmap</button><button>Graph</button></div>` +
+    Array.from({ length: 6 }, () => `<div class="rm-skel"><span class="bar-s w90"></span><span class="bar-s w60"></span></div>`).join("");
+  document.getElementById("main").innerHTML = `<div class="skel" role="status"><p class="muted"><span class="spin"></span>Starting your notebook…</p>
+    <div class="bar-s w80"></div><div class="bar-s"></div><div class="bar-s w60"></div><div class="bar-s w90"></div></div>`;
+}
+
+const PHASE_TEXT = { outlining: "Reading what you gave me and planning the chapters…", generating: "Writing the first chapter…" };
+
+// choose what the main area shows for the current snapshot (called when the outline appears or the notebook changes)
+function settleCourse(cid) {
+  const nb = S.nb, main = document.getElementById("main"); if (!main || !nb) return;
+  if (nb.status === "failed" && !nb.open_ready) {
+    main.innerHTML = `<div class="skel failed" role="alert"><p><strong>Something went wrong while preparing your notebook.</strong></p><p class="muted">${esc(nb.error || "Please try again.")}</p>
+      <button class="btn" id="retry">Try again</button></div>`;
+    document.getElementById("retry").onclick = async () => { try { await api(`notebooks/${nb.id}/retry`, {}); paintShell(); } catch (e) { fail(e); } };
+    return;
+  }
+  if (!nb.chapters.length) {
+    main.innerHTML = `<div class="skel" role="status"><p class="muted"><span class="spin"></span>${PHASE_TEXT[nb.status] || "Preparing your notebook…"}</p>
+      <div class="bar-s w80"></div><div class="bar-s"></div><div class="bar-s w60"></div><div class="bar-s w90"></div></div>`;
+    return;
+  }
+  if (!S.chapter) { const first = cid || nb.next_chapter || nb.chapters[0].id; loadChapter(first, true, true); }
+}
+
+function wirePanes(nid) {
+  const ws = document.getElementById("ws"), div = document.getElementById("divider"), pane = document.getElementById("chatpane"), fab = document.getElementById("chatfab");
+  const prefs = wsPrefs(nid);
+  const apply = () => {
+    ws.style.setProperty("--board", prefs.w + "%");
+    ws.classList.toggle("chat-closed", prefs.closed);
+    pane.inert = prefs.closed && !matchMedia("(max-width: 860px)").matches; fab.hidden = !prefs.closed;
+    div.hidden = prefs.closed; div.setAttribute("aria-valuenow", String(Math.round(prefs.w)));
+  };
+  const setClosed = (c) => { prefs.closed = c; wsSave(nid, prefs); apply(); if (c) fab.focus(); else { document.getElementById("chatdot").hidden = true; (document.getElementById("chatinput") || pane).focus?.(); } };
+  const setW = (w) => { prefs.w = Math.max(30, Math.min(80, w)); wsSave(nid, prefs); apply(); };
+  document.getElementById("dissolve").onclick = () => setClosed(true);
+  fab.onclick = () => setClosed(false);
+  div.onpointerdown = (e) => {
+    e.preventDefault(); div.setPointerCapture(e.pointerId); ws.classList.add("dragging");
+    const move = (ev) => { const r = ws.getBoundingClientRect(); setW(((ev.clientX - r.left) / r.width) * 100); };
+    const up = () => { ws.classList.remove("dragging"); div.removeEventListener("pointermove", move); div.removeEventListener("pointerup", up); };
+    div.addEventListener("pointermove", move); div.addEventListener("pointerup", up);
+  };
+  div.onkeydown = (e) => {
+    const step = e.shiftKey ? 10 : 3;
+    if (e.key === "ArrowLeft") { e.preventDefault(); setW(prefs.w - step); } else if (e.key === "ArrowRight") { e.preventDefault(); setW(prefs.w + step); }
+    else if (e.key === "Home") { e.preventDefault(); setW(30); } else if (e.key === "End") { e.preventDefault(); setW(80); }
+  };
+  const onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === ".") { e.preventDefault(); setClosed(!prefs.closed); } };
+  if (S.keyHandler) document.removeEventListener("keydown", S.keyHandler);
+  S.keyHandler = onKey; document.addEventListener("keydown", onKey);
+  // Course | Resources
+  const view = (v) => {
+    ws.dataset.view = v; store.set("view:" + nid, v);
+    document.getElementById("courseview").hidden = v !== "course"; document.getElementById("resview").hidden = v !== "resources";
+    document.getElementById("vt-course").setAttribute("aria-selected", String(v === "course")); document.getElementById("vt-res").setAttribute("aria-selected", String(v === "resources"));
+  };
+  document.getElementById("vt-course").onclick = () => view("course"); document.getElementById("vt-res").onclick = () => view("resources");
+  view(ws.dataset.view === "resources" ? "resources" : "course");
+  // phones: one pane at a time
+  document.querySelectorAll("#tabbar button").forEach((b) => b.onclick = () => {
+    const t = b.dataset.tab; ws.dataset.tab = t;
+    document.querySelectorAll("#tabbar button").forEach((x) => x.toggleAttribute("aria-current", x === b));
+    if (t === "course" || t === "resources") view(t);
+  });
+  apply();
+}
+
+// Resources view (basic list for now: what the student gave)
+function renderResources() {
+  const el = document.getElementById("resview"); if (!el || !S.nb) return;
+  const src = S.nb.sources || [];
+  const kind = { text: "Pasted text", url: "Link", pdf: "PDF", image: "Image" };
+  el.innerHTML = `<h2 class="res-h">Resources</h2>` + (src.length ? `<ul class="reslist">${src.map((s) => `<li class="resitem"><span class="rk">${kind[s.kind] || s.kind}</span>
+    <span class="rn">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</span>
+    <span class="muted">${s.status === "partly_readable" ? "Partly readable" : s.status === "unreadable" ? "Unreadable" : "Ready"}</span></li>`).join("")}</ul>`
+    : `<p class="muted">Nothing here yet. Resources you add, and sources Aasaan finds, appear in this view.</p>`);
 }
 
 function connect(nid) {
@@ -219,8 +301,9 @@ function connect(nid) {
 }
 
 function onSnapshot(nb) {
-  const cur = S.chapter;
-  S.nb = nb; renderHead(); renderSide();
+  const cur = S.chapter, hadChapters = !!(S.nb && S.nb.chapters.length);
+  S.nb = nb; renderHead(); renderSide(); renderResources();
+  if (!S.chapter || !hadChapters || nb.status === "failed") settleCourse();
   const now = cur && nb.chapters.find((c) => c.id === cur.id);
   if (!now) return;
   const becameReady = cur.status !== "ready" && now.status === "ready";
@@ -281,6 +364,7 @@ function chip(c) {
 function renderSide() {
   const side = document.getElementById("side"); if (!side) return;
   const nb = S.nb, cur = S.chapter?.id;
+  if (!nb.chapters.length) return;   // placeholders from paintShell stay until the outline arrives
   const body = S.side === "graph"
     ? `<div class="graph-wrap">${renderGraph(nb, cur)}</div><div class="legend">${legend()}</div>`
     : `<ol class="roadmap">${nb.chapters.map((c, i) => `<li><button class="rm n-${c.state}${c.id === cur ? " cur" : ""}" data-id="${c.id}">
@@ -301,11 +385,11 @@ async function loadChapter(cid, keepScroll = false, auto = false) {
   try {
     const ch = await api("chapters/" + cid);
     S.chapter = ch; S.quiz = null;
-    history.replaceState(null, "", `#/nb/${ch.notebook_id}/ch/${cid}`);
+    history.replaceState(null, "", `#/n/${ch.notebook_id}/ch/${cid}`);
     if (ch.status !== "ready") api(`chapters/${cid}/prioritize`, {}).catch(() => {});  // jump the queue
     else if (!auto) api(`chapters/${cid}/open`, {}).catch(() => {});   // landing on a chapter automatically is not "starting" it
     renderSide(); renderChapter();
-    if (!keepScroll) window.scrollTo({ top: document.querySelector(".nbhead")?.offsetHeight || 0, behavior: "smooth" });
+    if (!keepScroll) document.getElementById("board")?.scrollTo({ top: document.querySelector(".nbhead")?.offsetHeight || 0, behavior: "smooth" });
   } catch (e) { fail(e); }
 }
 
@@ -331,7 +415,7 @@ function renderChapter() {
 function skeleton(ch) {
   if (ch.status === "failed") return `<div class="skel failed"><p><strong>This chapter could not be built.</strong></p><p class="muted">${esc(ch.error || "Unknown error")}</p>
     <button class="btn" id="retry-ch">Try again</button></div>`;
-  return `<div class="skel" role="status"><p class="muted"><span class="spin"></span>${esc(STATUS_TEXT[ch.status] || "Queued")}. This chapter fills in on its own; you can read others meanwhile.</p>
+  return `<div class="skel" role="status"><p class="muted"><span class="spin"></span>${esc(({ queued: "Queued", drafting: "Writing notes", checking: "Checking facts" })[ch.status] || "Queued")}. This chapter fills in on its own; you can read others meanwhile.</p>
     <div class="bar-s w80"></div><div class="bar-s"></div><div class="bar-s w60"></div><div class="bar-s w90"></div></div>`;
 }
 

@@ -13,12 +13,15 @@ Low confidence is handled by the router (it escalates only the unsure questions)
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Optional
 
 from ..providers.typesafe import choice, noul, score
 from ..router import ModelRouter
 from ..schemas import QuizOut, resolve_key
 
+INPUT_GATE_BUDGET_S = 1.5
 LEVELS = ["beginner", "intermediate", "advanced"]
 TRACKS = {"programming": "learning a programming language or software development", "dsa": "data structures and algorithms",
           "web": "web, apps, cloud or devops", "data_ml": "data science, statistics, machine learning or AI",
@@ -178,11 +181,20 @@ def input_gate(router: ModelRouter, goal: str) -> Optional[str]:
     """A friendly refusal message, or None to go ahead. Only blocks when the decision is confident; student data (no Mercury)."""
     if not goal or len(goal.split()) < 2:
         return None
-    ans = router.decide("input_gate", {"message": goal[:600]}, {"kind": choice(
+    ask = lambda: router.decide("input_gate", {"message": goal[:600]}, {"kind": choice(  # noqa: E731
         "What is this message?", {"learn_request": "the student wants to learn or study something",
                                   "not_a_request": "nonsense, a greeting, or keyboard mashing with no topic",
                                   "unsafe": "asks for help with harming people, hateful, sexual or other clearly unsafe content, or wants to abuse the app"})},
         student_data=True, summary="input gate", timeout_s=6)
+    # The student is waiting on the submit button: the gate gets INPUT_GATE_BUDGET_S in total, then the request goes ahead (and says so).
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        ans = pool.submit(ask).result(timeout=INPUT_GATE_BUDGET_S)
+    except FutureTimeout:
+        router.note("input_gate", "fallback", "input gate skipped: no answer in time", f"no decision within {INPUT_GATE_BUDGET_S}s; the request went ahead")
+        return None
+    finally:
+        pool.shutdown(wait=False)
     a = (ans or {}).get("kind")
     if not a or a.get("unsure"):
         return None

@@ -190,3 +190,13 @@ def test_gate_escalation_is_recorded_when_jev_is_unsure(store, monkeypatch):
     monkeypatch.setattr(r.or_decider, "systemone", lambda m, s, q, t=15: {"real": {"type": "noul", "noul": 0.9}})
     assert gates.page_health(r, "https://x.example.com", "T", GOOD)[0]
     assert any("unsure about real: escalating" in e["error"] for e in store.events(100))
+
+
+def test_input_gate_never_holds_the_submit_button_longer_than_its_budget(router, monkeypatch, store):
+    import time
+    monkeypatch.setattr(gates, "INPUT_GATE_BUDGET_S", 0.2)
+    monkeypatch.setattr(router, "decide", lambda *a, **k: time.sleep(1.0))
+    t0 = time.perf_counter()
+    assert gates.input_gate(router, "teach me recursion") is None
+    assert time.perf_counter() - t0 < 0.8
+    assert any("input gate skipped" in e["summary"] for e in store.events())
