@@ -13,6 +13,11 @@ export function setTheme(pref) {
   if (pref === "dark") document.documentElement.setAttribute("data-theme", "dark"); else document.documentElement.removeAttribute("data-theme");
 }
 
+// The mascot: Aasaan, the old teacher. Cut-outs of frontend/mascot/aassan.png (transparent background, so they sit on both themes).
+export const MASCOT = "/static/mascot/aasaan-mascot.png";
+export const AVATAR = "/static/mascot/aasaan-avatar.png";
+export const avatarImg = (cls = "") => `<img class="mascot-av ${cls}" src="${AVATAR}" alt="" width="64" height="64" decoding="async">`;
+
 export const LANGS = { en: "English", hi: "हिन्दी", kn: "ಕನ್ನಡ", ta: "தமிழ்", te: "తెలుగు", ml: "മലയാളം", bn: "বাংলা", mr: "मराठी" };
 export const lang = () => store.get("lang") || "en";
 

@@ -110,3 +110,15 @@ def test_every_notebook_gets_one_of_the_four_thumbnails_and_it_never_changes(eng
     worker.run_until_idle()                                                       # the title changes when the outline arrives; the cover must not
     assert engine.notebook_view(nid)["cover"] == first == cover_image(nid)
     assert engine.list_notebooks("L1")[0]["cover"] == first
+
+
+def test_mascot_files_exist_are_transparent_and_are_used_by_the_ui():
+    from pathlib import Path
+    from PIL import Image
+    fe = Path(__file__).resolve().parents[2] / "frontend"
+    for name in ("aasaan-mascot.png", "aasaan-avatar.png"):
+        im = Image.open(fe / "mascot" / name)
+        assert im.mode == "RGBA" and im.getpixel((2, 2))[3] == 0, name          # transparent corners: it sits on both themes
+    js = (fe / "util.js").read_text(encoding="utf-8") + (fe / "chat.js").read_text(encoding="utf-8")
+    assert "mascot/aasaan-avatar.png" in js and "mascot/aasaan-mascot.png" in js
+    assert "mascot/aasaan-avatar.png" in (fe / "index.html").read_text(encoding="utf-8")   # favicon

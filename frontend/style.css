@@ -499,3 +499,16 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 .nbhead .cover .cover-title { display: none; }                      /* the heading beside it already says it */
 .nbhead .cover .cover-scrim { background: linear-gradient(to top, rgba(10,10,14,.22), transparent 55%); }
 @media (max-width: 860px) { .nbhead { grid-template-columns: 1fr; } }
+
+/* the mascot */
+.mascot-av { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.pul { overflow: hidden; background: var(--accent); width: 30px; height: 30px; border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent); }
+.brand .brand-av { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); align-self: center; flex: none; }
+.chat-name .head-av { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); flex: none; }
+.hero-mascot { display: block; height: 116px; width: auto; margin: 0 auto 6px; filter: drop-shadow(0 6px 10px rgba(0,0,0,.14)); animation: mascotin .6s cubic-bezier(.2,.8,.2,1); }
+:root[data-theme="dark"] .hero-mascot, :root[data-theme="dark"] .mascot-full { filter: drop-shadow(0 4px 10px rgba(0,0,0,.5)); }
+.mascot-full { display: block; height: 150px; width: auto; }
+.chat-empty .pul { display: none; }
+.hero { margin-top: 5vh; }
+@keyframes mascotin { from { opacity: 0; transform: translateY(10px) scale(.96); } }
+@media (prefers-reduced-motion: reduce) { .hero-mascot { animation: none; } }

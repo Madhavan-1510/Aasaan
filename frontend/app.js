@@ -1,5 +1,5 @@
 // Aasaan UI: Home -> Loading -> Notebook (roadmap + graph + chapter page). The agents are never shown.
-import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, themePref, setTheme } from "./util.js";
+import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, themePref, setTheme, avatarImg, MASCOT } from "./util.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderGraph, legend } from "./graph.js";
 import { createChat } from "./chat.js";
@@ -29,7 +29,7 @@ function cleanup() {
 
 function topbar(right = "") {
   $bar.innerHTML = `${S.modelReady === false ? `<div class="demo" role="alert">No AI model is connected. Add GEMINI_API_KEY to the .env file and restart the server to build notebooks.</div>` : ""}
-    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${ICON.logo}<span>Aasaan</span><small lang="ta">ஆசான்</small></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
+    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${avatarImg("brand-av")}<span>Aasaan</span><small lang="ta">ஆசான்</small></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
   const tgl = $bar.querySelector("#themetoggle");
   if (tgl) tgl.onclick = () => { const dark = themePref() !== "dark"; setTheme(dark ? "dark" : "light"); tgl.setAttribute("aria-checked", String(dark)); };
 }
@@ -66,7 +66,7 @@ async function home() {
   $app.className = "";
   let nbs = [];
   try { nbs = await api("notebooks?learner_id=" + S.learner); } catch { /* none yet */ }
-  $app.innerHTML = `<div class="hero"><h1>What do you want to learn today?</h1><p>Learning made aasaan. Type a goal, paste notes or links, or attach a photo or PDF.</p></div>
+  $app.innerHTML = `<div class="hero"><img class="hero-mascot" src="${MASCOT}" alt="Aasaan, your teacher" width="96"><h1>What do you want to learn today?</h1><p>Learning made aasaan. Type a goal, paste notes or links, or attach a photo or PDF.</p></div>
     <div class="composer" id="chat">
       <div class="att-row" id="atts"></div>
       <textarea id="msg" rows="1" placeholder="${PLACEHOLDERS[0]}" aria-label="Your goal, notes or links"></textarea>
@@ -195,7 +195,7 @@ async function workspace(nid, cid) {
     </section>
     <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize the chat panel" tabindex="0" aria-valuemin="30" aria-valuemax="80" aria-valuenow="${prefs.w}"></div>
     <aside class="chatpane" id="chatpane" aria-label="Chat with Aasaan">
-      <header class="chat-h"><span class="chat-name">${ICON.logo} Aasaan</span>
+      <header class="chat-h"><span class="chat-name">${avatarImg("head-av")} Aasaan</span>
         <button class="iconbtn" id="dissolve" aria-label="Hide chat" aria-keyshortcuts="Control+." title="Hide chat (Ctrl+.)">${ICON.right}</button></header>
       <div class="msgs" id="msgs" role="log" aria-live="polite" aria-label="Conversation"></div>
       <button class="jump" id="jump" type="button" hidden>New messages ↓</button>
