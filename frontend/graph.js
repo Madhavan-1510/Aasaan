@@ -1,7 +1,7 @@
 // Prerequisite graph: chapters as nodes, prerequisites as edges, coloured by state. Layered layout (no dependencies).
 import { esc } from "./util.js";
 
-export const STATE_LABEL = { ready: "Ready", in_progress: "In progress", done: "Done", needs_review: "Needs review", generating: "Generating", failed: "Failed" };
+export const STATE_LABEL = { not_started: "Not started", in_progress: "In progress", done: "Done", needs_review: "Needs review", generating: "Being prepared", failed: "Failed" };
 const W = 132, H = 40, GX = 18, GY = 40, PAD = 16, MAX_PER_ROW = 3;
 
 export function layout(chapters, edges) {

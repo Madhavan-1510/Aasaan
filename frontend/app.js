@@ -8,7 +8,8 @@ const $bar = document.getElementById("bar");
 const S = { learner: null, session: null, mode: "live", nb: null, chapter: null, files: [], side: store.get("side") || "roadmap",
             slide: {}, quiz: null, poll: null, es: null, companion: "" };
 const PLACEHOLDERS = ["What do you want to learn? e.g. I want to learn DSA", "Paste notes, links, or a chapter...", "Attach a textbook photo or PDF..."];
-const STATUS_TEXT = { queued: "Queued", drafting: "Writing notes", checking: "Checking facts", ready: "Ready", failed: "Failed" };
+const GEN_TEXT = { queued: "Queued", writing: "Writing notes", checking: "Checking facts", failed: "Failed" };
+const LEARN_TEXT = { not_started: "Not started", in_progress: "In progress", done: "Done", needs_review: "Needs review" };
 
 // ------------------------------------------------------------------------ shell
 function toast(msg) {
@@ -193,6 +194,7 @@ async function notebook(nid, cid) {
   $app.className = "wide";
   topbar(`<button class="linkbtn" id="finish">Finish for today</button>`);
   $app.innerHTML = `<div class="nbhead"><div class="cover" id="cover" aria-hidden="false"></div><div><h1 id="nbtitle"></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
+    <div id="srcnote"></div>
     <div id="note"></div>
     <div class="nb"><button class="chaps-toggle" id="chaps" aria-expanded="false">${ICON.list} Chapters</button>
       <aside class="side" id="side" aria-label="Chapters"></aside><section class="main" id="main" aria-live="polite"></section></div>`;
@@ -202,7 +204,7 @@ async function notebook(nid, cid) {
   renderHead(); renderSide();
   api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; renderNote(); }).catch(() => {});
   const first = cid || S.nb.next_chapter || S.nb.chapters[0]?.id;
-  if (first) await loadChapter(first);
+  if (first) await loadChapter(first, false, true);
   connect(nid);
 }
 
@@ -223,7 +225,7 @@ function onSnapshot(nb) {
   if (!now) return;
   const becameReady = cur.status !== "ready" && now.status === "ready";
   const statusChanged = cur.status !== now.status && now.status !== "ready";
-  if (becameReady) { if (!(S.quiz && S.quiz.cid === cur.id)) loadChapter(cur.id, true); }
+  if (becameReady) { if (!(S.quiz && S.quiz.cid === cur.id)) loadChapter(cur.id, true, true); }
   else if (statusChanged) { cur.status = now.status; cur.error = now.error; renderChapter(); }
 }
 
@@ -243,17 +245,37 @@ function renderHead() {
   }
   document.getElementById("nbdesc").innerHTML = esc(nb.description || "") + ((nb.sources || []).length
     ? `<span class="srcs">Based on: ${nb.sources.map((x) => x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc((x.title || x.url).slice(0, 40))}</a>` : `<span>${esc(x.title.slice(0, 40))}</span>`).join(" · ")}</span>` : "")
-    + ((nb.warnings || []).length ? `<span class="srcs warn">${nb.warnings.map(esc).join(" · ")}</span>` : "");
-  const r = nb.readiness;
-  document.getElementById("ready").innerHTML = `<span>${r >= 100 ? "Notebook ready" : `Notebook ${r}% ready`}</span>
-    <div class="meter" role="progressbar" aria-valuenow="${r}" aria-valuemin="0" aria-valuemax="100"><i style="width:${r}%"></i></div>
-    <span class="muted">${nb.progress.done} of ${nb.progress.total} chapters done</span>`;
+    + ((nb.warnings || []).length ? `<span class="srcs">${nb.warnings.map(esc).join(" · ")}</span>` : "");
+  renderSourceNotice();
+  const yp = nb.your_progress, pr = nb.preparing;
+  document.getElementById("ready").innerHTML = `<span>Your progress</span>
+    <div class="meter" role="progressbar" aria-label="Your progress" aria-valuenow="${yp.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${yp.pct}%"></i></div>
+    <span class="muted">${yp.done} of ${yp.total} chapters done</span>
+    ${pr.complete ? "" : `<span class="prep">Preparing your notebook</span>
+    <div class="meter prep" role="progressbar" aria-label="Preparing your notebook" aria-valuenow="${pr.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pr.pct}%"></i></div>
+    <span class="muted">${pr.ready} of ${pr.total} chapters ready</span>`}`;
+}
+
+function renderSourceNotice() {
+  const el = document.getElementById("srcnote"); if (!el) return;
+  const list = S.nb.source_issues || [];
+  el.innerHTML = list.map((s) => {
+    const total = s.issues.reduce((n, i) => n + i.pages.length, 0);
+    const kinds = s.issues.map((i) => i.kind);
+    const head = kinds.every((k) => k === "drawing_only" || k === "blank" || k === "over_limit")
+      ? `${total} page${total === 1 ? "" : "s"} of ${esc(s.title)} ${total === 1 ? "has" : "have"} no text to read.` : `${total} page${total === 1 ? "" : "s"} of ${esc(s.title)} couldn't be read.`;
+    const read = s.pages_total ? ` ${s.pages_read} of ${s.pages_total} pages were read.` : "";
+    const rng = (p) => p.length > 6 ? `${p[0]} to ${p[p.length - 1]} (${p.length} pages)` : p.join(", ");
+    return `<details class="calm"><summary>${head}${read}</summary>${s.issues.map((i) => `<p><strong>Pages ${rng(i.pages)}.</strong> ${esc(i.reason)}</p>`).join("")}
+      ${kinds.includes("failed") ? `<p class="muted">Attach clearer photos or a better scan of those pages and Aasaan will read them.</p>` : ""}</details>`;
+  }).join("");
 }
 
 function chip(c) {
-  if (c.state === "generating") return `<span class="chip gen">${STATUS_TEXT[c.status] || "Generating"}${c.status === "queued" ? "" : "…"}</span>`;
-  const t = { ready: "Ready", in_progress: "In progress", done: "Done", needs_review: "Needs review", failed: "Failed" }[c.state];
-  return `<span class="chip s-${c.state}">${t}</span>`;
+  // Two separate things: how far the student is (learning) and whether the chapter is built yet (generation, shown only until it is ready).
+  if (c.generation === "failed") return `<span class="chip s-failed">Failed</span>`;
+  if (c.generation !== "ready") return `<span class="chip gen">${GEN_TEXT[c.generation] || "Preparing"}${c.generation === "queued" ? "" : "…"}</span>`;
+  return `<span class="chip s-${c.learning}">${LEARN_TEXT[c.learning]}</span>`;
 }
 
 function renderSide() {
@@ -262,7 +284,7 @@ function renderSide() {
   const body = S.side === "graph"
     ? `<div class="graph-wrap">${renderGraph(nb, cur)}</div><div class="legend">${legend()}</div>`
     : `<ol class="roadmap">${nb.chapters.map((c, i) => `<li><button class="rm n-${c.state}${c.id === cur ? " cur" : ""}" data-id="${c.id}">
-        <span class="num">${i + 1}</span><span class="rt">${esc(c.title)}${c.kind === "review" ? ` <em>review</em>` : ""}</span>${chip(c)}</button></li>`).join("")}</ol>`;
+        <span class="num">${i + 1}</span><span class="rt">${esc(c.title)}${c.kind === "review" ? ` <em>review</em>` : ""}</span><span class="rchip">${chip(c)}</span></button></li>`).join("")}</ol>`;
   document.querySelector(".nb")?.classList.toggle("gmode", S.side === "graph");
   side.innerHTML = `<div class="seg" role="tablist"><button role="tab" id="t-roadmap" aria-selected="${S.side !== "graph"}">${ICON.list} Roadmap</button>
       <button role="tab" id="t-graph" aria-selected="${S.side === "graph"}">${ICON.graph} Graph</button></div>${body}`;
@@ -274,14 +296,14 @@ function renderSide() {
 }
 
 // ---------------------------------------------------------------------- chapter
-async function loadChapter(cid, keepScroll = false) {
+async function loadChapter(cid, keepScroll = false, auto = false) {
   const main = document.getElementById("main"); if (!main) return;
   try {
     const ch = await api("chapters/" + cid);
     S.chapter = ch; S.quiz = null;
     history.replaceState(null, "", `#/nb/${ch.notebook_id}/ch/${cid}`);
     if (ch.status !== "ready") api(`chapters/${cid}/prioritize`, {}).catch(() => {});  // jump the queue
-    else api(`chapters/${cid}/open`, {}).catch(() => {});
+    else if (!auto) api(`chapters/${cid}/open`, {}).catch(() => {});   // landing on a chapter automatically is not "starting" it
     renderSide(); renderChapter();
     if (!keepScroll) window.scrollTo({ top: document.querySelector(".nbhead")?.offsetHeight || 0, behavior: "smooth" });
   } catch (e) { fail(e); }
@@ -296,11 +318,14 @@ function renderChapter() {
   const nav = `<nav class="ch-nav">${prev ? `<button class="btn ghost" data-go="${prev.id}">${ICON.left} ${esc(prev.title.slice(0, 28))}</button>` : "<span></span>"}
     ${next ? `<button class="btn ghost" data-go="${next.id}">${esc(next.title.slice(0, 28))} ${ICON.right}</button>` : ""}</nav>`;
   if (ch.status !== "ready") { main.innerHTML = head + skeleton(ch) + nav; wireNav(main); return; }
-  const notices = [ch.unverified ? `<p class="flag">Not fully checked: the fact-checker still had questions about this chapter.</p>` : "",
+  const issues = ch.review_issues || [];
+  const notices = [ch.unverified ? `<div class="flag"><p>A few claims couldn't be fully verified.</p>
+      <div class="flag-actions">${issues.length ? `<button class="linkbtn" id="seeclaims" aria-expanded="false">See which claims</button>` : ""}<button class="linkbtn" id="recheck">Re-check</button></div>
+      <ul class="claims" id="claims" hidden>${issues.map((i) => `<li>${esc(i.claim)} <span class="muted">(${esc(i.source_status)})</span></li>`).join("")}</ul></div>` : "",
                    !ch.grounded ? `<p class="flag">Written from general knowledge; no source material was supplied.</p>` : "",
                    ...(ch.curator_notes || []).map((n) => `<p class="flag">${esc(n)}</p>`)].join("");
   main.innerHTML = head + notices + ch.blocks.map(blockHtml).join("") + doubtHtml() + nav;
-  wireNav(main); wireBlocks(main);
+  wireNav(main); wireBlocks(main); wireClaims(main);
 }
 
 function skeleton(ch) {
@@ -344,6 +369,19 @@ function wireNav(main) {
   main.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => loadChapter(Number(b.dataset.go)));
   const r = main.querySelector("#retry-ch");
   if (r) r.onclick = async () => { try { await api(`chapters/${S.chapter.id}/retry`, {}); toast("Trying again..."); } catch (e) { fail(e); } };
+}
+
+function wireClaims(main) {
+  const see = main.querySelector("#seeclaims"), list = main.querySelector("#claims"), re = main.querySelector("#recheck");
+  if (see && list) see.onclick = () => { list.hidden = !list.hidden; see.setAttribute("aria-expanded", String(!list.hidden)); };
+  if (re) re.onclick = async () => {
+    re.disabled = true; re.textContent = "Re-checking…";
+    try {
+      const r = await api(`chapters/${S.chapter.id}/recheck`, {});
+      toast(r.verified ? "All claims check out now." : "Some claims still couldn't be verified.");
+      await loadChapter(S.chapter.id, true, true);
+    } catch (e) { fail(e); re.disabled = false; re.textContent = "Re-check"; }
+  };
 }
 
 function wireBlocks(main) {

@@ -238,7 +238,7 @@ class Engine:
             self.store.update_source_chunks(src["id"], [c.model_dump() for c in res.chunks])
             for t in res.topics:
                 topics.append({**t.model_dump(), "source_id": src["id"]})
-            warnings += res.warnings
+            warnings += [w for w in res.warnings if not re.match(r"page \d+ unreadable or empty$", w)]   # shown once per file in Resources instead
         chunks = self._all_chunks(nid)
         self.store.cache_set(f"nbwarn:{nid}", warnings)
         if not (nb["goal"] or topics):
@@ -275,12 +275,22 @@ class Engine:
             pages = intake.pages_from_text(page.text)
         elif kind == "pdf":
             try:
-                pages = intake.pages_from_pdf(Path(src["raw_ref"]).read_bytes())
+                data = Path(src["raw_ref"]).read_bytes()
+                pages, empties = intake.analyze_pdf(data)
             except Exception as e:
                 warnings.append(f"Could not read PDF {src['title']}: {e}")
+                self.store.set_source_meta(sid, {"status": "unreadable", "issues": [{"kind": "unreadable", "pages": [], "reason": str(e)[:200]}]})
                 return None
+            pages, meta = self._recover_pages(data, pages, empties, lang, src["title"])
+            in_file = intake.pdf_page_count(data)
+            if in_file > len(pages):   # intake reads a bounded number of pages: say so instead of silently ignoring the rest
+                meta["pages_total"] = in_file
+                meta["issues"].append({"kind": "over_limit", "pages": list(range(len(pages) + 1, in_file + 1)), "checked_with_vision": False,
+                                       "reason": f"Aasaan reads the first {len(pages)} pages of a file. The rest were not read."})
+                meta["status"] = "partly_readable" if meta["status"] == "ready" else meta["status"]
+            self.store.set_source_meta(sid, meta)
             if not any(p.strip() for p in pages):
-                warnings.append(f"{src['title']} has no selectable text (scanned?). Attach photos of the pages instead.")
+                warnings.append(f"{src['title']} has no readable text. Attach clearer photos of the pages instead.")
                 return None
         elif kind == "image":
             ext = Path(src["raw_ref"]).suffix.lower().lstrip(".")
@@ -288,6 +298,69 @@ class Engine:
             images = [(mime, Path(src["raw_ref"]).read_bytes())]
         res = intake.run(self.router, sid, pages, images, lang, nb["goal"])
         return res.value
+
+    def _recover_pages(self, data: bytes, pages: list[str], empties: list[dict], language: str, title: str) -> tuple[list[str], dict]:
+        """Pages with no text layer: scans (images) and pages that might hold outlined text go to a vision model; drawing-only pages are probed
+        once per kind and, if the probe finds no text, reported as such without spending a call on each. Returns (pages, source meta)."""
+        pages = list(pages)
+        total, recovered = len(pages), []
+        todo, probe_groups = [], {}
+        for e in empties:
+            if e["images"] > 0 or (e["fonts"] == 0 and e["content_bytes"] >= intake.VECTOR_TEXT_BYTES):
+                todo.append(e)
+            elif e["content_bytes"] > 0:
+                probe_groups.setdefault(e["content_bytes"] // 1000, []).append(e)
+        no_text: dict[str, list[int]] = {"blank": [e["page"] for e in empties if e["content_bytes"] == 0 and e["images"] == 0], "drawing_only": [], "failed": []}
+        vision_checked = False
+        budget = intake.OCR_MAX_PAGES
+        for group in list(probe_groups.values())[:2]:          # one vision probe per kind of drawing-only page
+            png = intake.render_page_png(data, group[0]["page"])
+            if png is None or budget <= 0:
+                no_text["drawing_only"] += [e["page"] for e in group]
+                continue
+            budget -= 1
+            got = intake.ocr_page(self.router, png, language, f"{title[:30]} p{group[0]['page']}")
+            vision_checked = True
+            if got["failed"]:
+                no_text["failed"] += [e["page"] for e in group]
+            elif got["empty"]:
+                no_text["drawing_only"] += [e["page"] for e in group]
+            else:                                              # the probe found text: this kind of page is worth reading in full
+                pages[group[0]["page"] - 1] = got["text"]
+                recovered.append(group[0]["page"])
+                todo += group[1:]
+        for g in list(probe_groups.values())[2:]:              # more than two kinds of drawing-only page: not worth more probes
+            no_text["drawing_only"] += [e["page"] for e in g]
+        for e in todo:
+            if budget <= 0:
+                no_text["failed"].append(e["page"])
+                continue
+            png = intake.render_page_png(data, e["page"])
+            if png is None:
+                no_text["failed"].append(e["page"])
+                continue
+            budget -= 1
+            got = intake.ocr_page(self.router, png, language, f"{title[:30]} p{e['page']}")
+            vision_checked = True
+            if got["failed"]:
+                no_text["failed"].append(e["page"])
+            elif got["empty"]:
+                no_text["drawing_only" if e["images"] == 0 else "blank"].append(e["page"])
+            else:
+                pages[e["page"] - 1] = got["text"]
+                recovered.append(e["page"])
+        reasons = {"blank": "Nothing is printed on these pages.",
+                   "drawing_only": "These pages have only lines or shapes, for example an empty table grid, and no text" +
+                                   (" (checked with a vision model)." if vision_checked else "."),
+                   "failed": "These pages may hold text, but it could not be read automatically. A clearer scan or photo would help."}
+        issues = [{"kind": k, "pages": sorted(set(v)), "reason": reasons[k], "checked_with_vision": vision_checked and k != "failed"} for k, v in no_text.items() if v]
+        read = sum(1 for p in pages if p.strip())
+        status = "unreadable" if read == 0 else ("partly_readable" if issues else "ready")
+        if recovered:
+            self.router.note("intake", "ok", f"read {len(recovered)} page(s) of '{title[:40]}' with a vision model", f"pages {recovered[:12]}: no text layer")
+        for i in issues:
+            log.info("[aasaan] %s: %d page(s) with no text (%s): %s", title, len(i["pages"]), i["kind"], i["reason"])
+        return pages, {"status": status, "pages_total": total, "pages_read": read, "recovered_with_vision": sorted(recovered), "issues": issues}
 
     # ============================================================== chapters
     def build_chapter(self, cid: int) -> None:
@@ -309,7 +382,7 @@ class Engine:
         link_refs = [{"ref": f"url:{c.url}", "title": c.title, "source": c.source, "kind": c.kind} for c in res.links + res.videos]
         allowed_extra = {l["ref"] for l in link_refs}
 
-        issues, previous, content, verified, revisions = None, None, None, False, 0
+        issues, previous, content, verified, revisions, open_points = None, None, None, False, 0, []
         quiz_future = None
         with ThreadPoolExecutor(max_workers=2) as pool:
             for attempt in range(MAX_REVISIONS + 1):
@@ -321,6 +394,7 @@ class Engine:
                 if review.verdict == "approve":
                     verified = True
                     break
+                open_points = [i.model_dump() for i in review.issues]
                 if attempt == MAX_REVISIONS:
                     self.router.note("critic", "fallback", f"Chapter '{ch['title'][:40]}' shipped unverified",
                                      f"Critic still had {len(review.issues)} issue(s) after {MAX_REVISIONS} revisions")
@@ -364,7 +438,8 @@ class Engine:
         blocks.append({"type": "quiz", "content": {"questions": [q.model_dump() for q in quiz.questions]}})
         blocks.append({"type": "summary", "content": {"text": content.summary, "key_points": content.key_points}})
         meta = {**ch["meta"], "unverified": not verified, "grounded": bool(chunks), "revisions": revisions,
-                "page_chunks": page_chunks, "curator_notes": res.notes}
+                "page_chunks": page_chunks, "curator_notes": res.notes,
+                "review_issues": [] if verified else self._claim_rows(open_points, chunks, allowed_extra)}
         self.store.replace_blocks(cid, blocks, "ready", meta)
         if verified:
             self.store.cache_set(teacher.content_cache_key(ch, prof.language), content.model_dump())
@@ -405,6 +480,34 @@ class Engine:
         self.store.update_chapter(cid, priority=60)
         self.store.add_job(nb["id"], cid, "chapter")
 
+    def recheck_chapter(self, cid: int) -> dict:
+        """"Re-check": run the Critic again over the chapter exactly as stored (including the student's own edits)."""
+        ch = self._chapter(cid)
+        if ch["status"] != "ready":
+            raise UserError("This chapter is still being prepared.")
+        with self._scope(ch["notebook_id"]):
+            nb = self._nb(ch["notebook_id"])
+            prof = self.profile(nb["learner_id"], nb)
+            blocks = self.store.blocks(cid)
+            notes = next((b for b in blocks if b["type"] == "notes"), None)
+            if not notes:
+                raise UserError("This chapter has no notes to check.")
+            slides = next((b["content"].get("cards", []) for b in blocks if b["type"] == "slides"), [])
+            summ = next((b["content"] for b in blocks if b["type"] == "summary"), {})
+            data = {"notes_md": notes["content"].get("markdown", ""), "slides": [{"title": s.get("title", ""), "points": s.get("points", [])} for s in slides],
+                    "key_points": summ.get("key_points", []), "summary": summ.get("text", ""), "source_refs": (notes["meta"] or {}).get("refs", [])}
+            try:
+                content = ChapterContent.model_validate(data)
+            except ValueError:   # the student's edits can break the strict shape (very short notes); the Critic only reads the text
+                content = ChapterContent.model_construct(**data)
+            chunks = self._chapter_chunks(ch, self._all_chunks(nb["id"])) + (ch["meta"].get("page_chunks") or [])
+            allowed = {f"url:{b['content'].get('url')}" for b in blocks if b["type"] in ("link", "video") and b["content"].get("url")}
+            review = critic.run(self.router, content, chunks, prof, allowed).value
+            verified = review.verdict == "approve"
+            rows = [] if verified else self._claim_rows([i.model_dump() for i in review.issues], chunks, allowed)
+            self.store.update_chapter(cid, meta={**ch["meta"], "unverified": not verified, "review_issues": rows})
+            return {"verified": verified, "review_issues": rows}
+
     def retry_notebook(self, nid: str) -> None:
         """"Try again" on the Loading screen: re-run the outline and/or the first chapter."""
         nb = self._nb(nid)
@@ -417,19 +520,41 @@ class Engine:
         self.store.add_job(nid, None, "notebook")
 
     # =============================================================== views
+    GENERATION = {"queued": "queued", "drafting": "writing", "checking": "checking", "ready": "ready", "failed": "failed"}
+
+    @classmethod
+    def _generation(cls, ch: dict) -> str:
+        """Where the chapter is in being built: queued, writing, checking, ready, failed. Shown only while it is not ready."""
+        return cls.GENERATION.get(ch["status"], "queued")
+
     @staticmethod
-    def _state(ch: dict) -> str:
-        if ch["status"] == "failed":
-            return "failed"
-        if ch["status"] != "ready":
-            return "generating"
+    def _learning(ch: dict) -> str:
+        """Where the STUDENT is with it: not_started, in_progress, done, needs_review. Independent of generation."""
         if ch["needs_review"]:
             return "needs_review"
         if ch["completed"]:
             return "done"
-        if ch["started"]:
-            return "in_progress"
-        return "ready"
+        return "in_progress" if ch["started"] else "not_started"
+
+    @classmethod
+    def _state(cls, ch: dict) -> str:
+        """One value for colouring the graph: failed, generating (not ready yet), else the learning state."""
+        if ch["status"] == "failed":
+            return "failed"
+        if ch["status"] != "ready":
+            return "generating"
+        return cls._learning(ch)
+
+    @staticmethod
+    def _claim_rows(points: list[dict], chunks: list[dict], allowed_extra: set) -> list[dict]:
+        """What the Critic could not verify, with whether the source it points at exists (shown under "See which claims")."""
+        known = {c["chunk_id"] for c in chunks} | set(allowed_extra)
+        rows = []
+        for p in points[:12]:
+            ref = p.get("source_ref")
+            rows.append({"claim": str(p.get("problem", ""))[:400], "where": str(p.get("step", "")), "source_ref": ref,
+                         "source_status": "no source cited" if not ref else ("source found" if ref in known else "cited source not in this notebook")})
+        return rows
 
     def notebook_view(self, nid: str) -> dict:
         nb = self._nb(nid)
@@ -439,6 +564,7 @@ class Engine:
         done = sum(1 for c in chs if c["completed"])
         view_chs = [{"id": c["id"], "position": c["position"], "title": c["title"], "summary": c["summary"],
                      "objectives": c["objectives"], "prereqs": c["prereqs"], "status": c["status"], "state": self._state(c),
+                     "learning": self._learning(c), "generation": self._generation(c),
                      "kind": c["kind"], "needs_review": c["needs_review"], "completed": c["completed"], "error": c["error"]}
                     for c in chs]
         edges = [[p, c["id"]] for c in chs for p in c["prereqs"]]
@@ -446,8 +572,15 @@ class Engine:
         return {"id": nid, "title": nb["title"], "goal": nb["goal"], "description": nb["description"], "level": nb["level"],
                 "language": nb["language"], "status": nb["status"], "error": nb["error"],
                 "chapters": view_chs, "edges": edges, "readiness": readiness, "open_ready": first_ready,
-                "progress": {"done": done, "total": len(chs)}, "warnings": self.store.cache_get(f"nbwarn:{nid}") or [],
-                "sources": [{"id": src["id"], "kind": src["kind"], "title": src["title"],
+                "your_progress": {"done": done, "total": len(chs), "pct": round(100 * done / len(chs)) if chs else 0},
+                "preparing": {"ready": sum(1 for c in chs if c["status"] == "ready"), "total": len(chs),
+                              "pct": round(100 * sum(1 for c in chs if c["status"] == "ready") / len(chs)) if chs else 0,
+                              "complete": bool(chs) and all(c["status"] == "ready" for c in chs)},
+                "progress": {"done": done, "total": len(chs)}, "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
+                "source_issues": [{"source_id": s["id"], "title": s["title"], "status": s["meta"].get("status", "ready"), "pages_total": s["meta"].get("pages_total"),
+                                   "pages_read": s["meta"].get("pages_read"), "issues": s["meta"].get("issues", [])}
+                                  for s in self.store.sources(nid) if (s["meta"] or {}).get("issues")],
+                "sources": [{"id": src["id"], "kind": src["kind"], "title": src["title"], "status": (src["meta"] or {}).get("status", "ready"),
                              "url": src["raw_ref"] if src["kind"] == "url" else "", "chunks": len(src["chunks"])}
                             for src in self.store.sources(nid)],
                 "mode": self.router.mode, "generating": self.store.active_jobs(nid) > 0,
@@ -483,7 +616,8 @@ class Engine:
             out_blocks.append({"id": b["id"], "type": b["type"], "content": content, "verified": b["verified"], "meta": b["meta"]})
         meta = ch["meta"]
         return {"id": cid, "notebook_id": nb["id"], "title": ch["title"], "summary": ch["summary"], "objectives": ch["objectives"],
-                "status": ch["status"], "state": self._state(ch), "kind": ch["kind"], "error": ch["error"],
+                "status": ch["status"], "state": self._state(ch), "learning": self._learning(ch), "generation": self._generation(ch),
+                "kind": ch["kind"], "error": ch["error"], "review_issues": meta.get("review_issues", []),
                 "blocks": out_blocks, "unverified": bool(meta.get("unverified")), "grounded": meta.get("grounded", True),
                 "curator_notes": meta.get("curator_notes", []), "completed": ch["completed"]}
 
@@ -512,10 +646,19 @@ class Engine:
         prof = self.profile(learner_id, nb)
         chs = self.store.chapters(nid)
         nxt = next((str(c["id"]) for c in chs if c["status"] == "ready" and not c["completed"]), None)
-        res = companion.run(self.router, "open", prof, [str(c["id"]) for c in chs], nxt,
-                            last_summary=self.store.last_summary(learner_id),
-                            returning=self.store.session_count(learner_id) > 1, notebook_title=nb["title"])
-        return {"message": res.value.message, "suggested_next": res.value.suggested_next, "mistake_labels": prof.mistake_labels}
+        # The greeting is fixed text chosen by code from stored memory. A model never writes it, so it can never claim a history the student
+        # does not have ("welcome back" on a first session). Opening the app opens a session each time, so "returning" means real history.
+        first = not self.store.has_history(learner_id)
+        return {"message": self.greeting(first, nb["title"], prof.mistake_labels, self.store.last_summary(learner_id)),
+                "suggested_next": nxt, "mistake_labels": prof.mistake_labels, "is_first_session": first}
+
+    @staticmethod
+    def greeting(first_session: bool, title: str, labels: list[str], last_summary: Optional[str]) -> str:
+        if first_session:
+            return f"Your notebook \"{title}\" is taking shape. Open the first chapter whenever you like, and ask me anything in the chat."
+        if labels:
+            return f"Welcome back. Last time you mixed up '{labels[0]}', so it is worth a quick look. Let's continue with \"{title}\"."
+        return f"Welcome back. Let's continue with \"{title}\"."
 
     def close_session(self, learner_id: str, session_id: str, nid: Optional[str]) -> dict:
         nb = self._nb(nid) if nid else None

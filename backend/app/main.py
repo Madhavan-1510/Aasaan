@@ -268,6 +268,10 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
         engine.retry_chapter(cid)
         return {"ok": True}
 
+    @app.post("/api/chapters/{cid}/recheck")
+    async def chapter_recheck(cid: int):
+        return await run_in_threadpool(engine.recheck_chapter, cid)
+
     @app.put("/api/blocks/{bid}")
     def edit_block(bid: int, body: BlockIn):
         engine.edit_block(bid, {"markdown": body.markdown})

@@ -36,10 +36,82 @@ def pages_from_text(text: str) -> list[str]:
 
 
 def pages_from_pdf(data: bytes) -> list[str]:
+    return analyze_pdf(data)[0]
+
+
+# --------------------------------------------------------------------------- PDF pages that have no text
+OCR_MAX_PAGES = 12          # vision calls per PDF, at most
+VECTOR_TEXT_BYTES = 20_000  # a page with no fonts but this much drawing could be text drawn as outlines
+
+
+def analyze_pdf(data: bytes) -> tuple[list[str], list[dict]]:
+    """(page texts, facts about each page with no text). The facts say WHY a page has no text (images only = a scan; drawing only
+    = grid, diagram or outlined text; nothing at all = blank), so only pages that could hold text reach a vision model."""
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
-    return [(p.extract_text() or "").strip() for p in reader.pages[:MAX_PAGES]]
+    texts, empties = [], []
+    for n, p in enumerate(reader.pages[:MAX_PAGES], start=1):
+        t = (p.extract_text() or "").strip()
+        texts.append(t)
+        if t:
+            continue
+        try:
+            images = len(list(p.images))
+        except Exception:  # noqa: BLE001  odd image objects must not stop reading
+            images = 0
+        res = p.get("/Resources") or {}
+        fonts = len((res.get("/Font") or {}) if hasattr(res, "get") else {})
+        size = 0
+        try:
+            c = p.get("/Contents")
+            obj = c.get_object() if c is not None else None
+            parts = obj if isinstance(obj, list) else [obj] if obj is not None else []
+            size = sum(len(x.get_object().get_data()) for x in parts)
+        except Exception:  # noqa: BLE001
+            pass
+        empties.append({"page": n, "images": images, "fonts": fonts, "content_bytes": size})
+    return texts, empties
+
+
+def pdf_page_count(data: bytes) -> int:
+    from pypdf import PdfReader
+    try:
+        return len(PdfReader(io.BytesIO(data)).pages)
+    except Exception:  # noqa: BLE001  an unreadable file is reported elsewhere
+        return 0
+
+
+def render_page_png(data: bytes, page: int, scale: float = 1.6) -> Optional[bytes]:
+    """The page as a PNG for a vision model (pypdfium2). None when no renderer is installed."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return None
+    pdf = pdfium.PdfDocument(data)
+    img = pdf[page - 1].render(scale=scale).to_pil()
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def ocr_page(router: ModelRouter, png: bytes, language: str, label: str) -> dict:
+    """{"text", "empty", "failed"}: ask a vision model to transcribe one rendered page. Says "empty" for a page with no text."""
+    def validate(raw: dict) -> dict:
+        text = str(raw.get("text") or "").strip()
+        if raw.get("empty") is True and not text:
+            return {"text": "", "empty": True, "failed": False}
+        if not text:
+            raise ValueError("no text and not marked empty")
+        return {"text": text[:6000], "empty": False, "failed": False}
+
+    prompt = build_prompt(
+        "You are Reader. Transcribe ALL text visible on this page image faithfully, in reading order; do not correct, translate or add anything. "
+        "If the page has no readable text (blank, an empty table grid, only lines or shapes), reply with empty=true and text=\"\".",
+        {"text": "the transcribed text", "empty": False}, {"language_hint": lang_name(language), "page": label})
+    res = router.call("ocr", prompt, {"page": label}, validate, last_resort=lambda c: {"text": "", "empty": False, "failed": True},
+                      images=[("image/png", png)], summary=f"OCR {label}", language=None)
+    return res.value
 
 
 def chunk_pages(source_id: str, pages: list[str], first_page: int = 1) -> tuple[list[dict], list[str]]:

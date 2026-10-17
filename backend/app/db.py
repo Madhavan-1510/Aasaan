@@ -72,6 +72,13 @@ class Store:
             self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Additive column migrations for databases created by an earlier version."""
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(sources)")}
+        if "meta" not in have:
+            self.conn.execute("ALTER TABLE sources ADD COLUMN meta TEXT")
 
     # -- low level (autocommit; transaction() opens an explicit BEGIN) -------
     def _run(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -151,11 +158,24 @@ class Store:
     def update_source_chunks(self, sid: str, chunks: list[dict]) -> None:
         self._run("UPDATE sources SET chunks=? WHERE id=?", (_j(chunks), sid))
 
+    def set_source_meta(self, sid: str, meta: dict) -> None:
+        self._run("UPDATE sources SET meta=? WHERE id=?", (_j(meta), sid))
+
+    def has_history(self, learner_id: str) -> bool:
+        """Does memory show an earlier session? A session that was closed, or any quiz attempt or recorded mistake. Merely opening the app
+        (every page load opens a session) does not count."""
+        if self._one("SELECT 1 FROM sessions WHERE learner_id=? AND ended IS NOT NULL LIMIT 1", (learner_id,)):
+            return True
+        if self._one("SELECT 1 FROM quiz_attempts WHERE learner_id=? LIMIT 1", (learner_id,)):
+            return True
+        return bool(self.mistake_labels(learner_id))
+
     def sources(self, nid: str) -> list[dict]:
         out = []
         for r in self._all("SELECT * FROM sources WHERE notebook_id=? ORDER BY rowid", (nid,)):
             d = dict(r)
             d["chunks"] = _l(d["chunks"], [])
+            d["meta"] = _l(d.get("meta"), {})
             out.append(d)
         return out
 

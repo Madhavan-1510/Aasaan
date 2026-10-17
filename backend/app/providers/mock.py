@@ -131,6 +131,10 @@ class MockProvider(Provider):
     def _critic(self, c: dict) -> dict:
         return {"verdict": "approve", "issues": [], "confidence": 0.9}
 
+    # ---- OCR (demo: a scanned page reads as a short sample; a script can return {"empty": true}) -----
+    def _ocr(self, c: dict) -> dict:
+        return {"text": f"Sample transcription of {c.get('page', 'a page')} (demo mode).", "empty": False}
+
     # ---- Illustrator ------------------------------------------------------
     def _illustrator(self, c: dict) -> dict:
         kind, head = c.get("kind", "flowchart"), (c.get("section") or "Idea")[:40]

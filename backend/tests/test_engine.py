@@ -112,7 +112,7 @@ def test_image_attachment_is_read_by_the_vision_role(engine, worker, store):
 
 def test_pdf_attachment_goes_through_text_extraction(engine, worker, store, monkeypatch, sample_text):
     from app.agents import intake
-    monkeypatch.setattr(intake, "pages_from_pdf", lambda data: [sample_text, "More about velocity and speed in everyday motion."])
+    monkeypatch.setattr(intake, "analyze_pdf", lambda data: ([sample_text, "More about velocity and speed in everyday motion."], []))
     nid = make(engine, "", [("notes.pdf", "application/pdf", b"%PDF-1.4 fake")])
     v = build_all(engine, worker, nid)
     assert store.sources(nid)[0]["kind"] == "pdf" and {c["page"] for c in store.sources(nid)[0]["chunks"]} == {1, 2}
@@ -438,3 +438,61 @@ def test_search_topic_never_uses_a_long_personal_goal():
     assert search_topic({"goal": "Learn DSA", "title": "Data Structures"}) == "Learn DSA"
     long = "I'm part of the training for HCL - this is the syllabus given to us, i need a clean roadmap\r\n\r\nbest resources please"
     assert search_topic({"goal": long, "title": "Cloud Data Engineering Roadmap"}) == "Cloud Data Engineering Roadmap"
+
+
+# ------------------------------------------------------------- Milestone 3, section 6: honest status, progress, greeting
+def test_unopened_chapters_say_not_started_and_generation_is_separate(engine, worker, store):
+    nid = make(engine, "Teach me binary search")
+    v = build_all(engine, worker, nid)
+    assert {c["learning"] for c in v["chapters"]} == {"not_started"} and {c["generation"] for c in v["chapters"]} == {"ready"}
+    assert {c["state"] for c in v["chapters"]} == {"not_started"}
+    engine.open_chapter(v["chapters"][0]["id"])
+    v = engine.notebook_view(nid)
+    assert [c["learning"] for c in v["chapters"]][:2] == ["in_progress", "not_started"]
+    store.set_chapter_status(v["chapters"][1]["id"], "drafting")
+    c2 = engine.notebook_view(nid)["chapters"][1]
+    assert c2["generation"] == "writing" and c2["state"] == "generating" and c2["learning"] == "not_started"
+
+
+def test_two_progress_measures_are_independent(engine, worker, store):
+    nid = make(engine, "Teach me binary search")
+    v = build_all(engine, worker, nid)
+    assert v["your_progress"] == {"done": 0, "total": len(v["chapters"]), "pct": 0}
+    assert v["preparing"]["complete"] and v["preparing"]["pct"] == 100
+    store.set_chapter_status(v["chapters"][-1]["id"], "queued")
+    v = engine.notebook_view(nid)
+    assert not v["preparing"]["complete"] and v["preparing"]["ready"] == len(v["chapters"]) - 1 and v["your_progress"]["pct"] == 0
+
+
+def test_first_session_greeting_is_fixed_text_and_never_says_welcome_back(engine, worker, store):
+    nid = make(engine, "Teach me binary search")
+    build_all(engine, worker, nid)
+    for _ in range(3):                                   # opening the app opens a session each time: that is not history
+        store.open_session("L1")
+    g = engine.companion_open("L1", nid)
+    assert g["is_first_session"] and "Welcome back" not in g["message"] and "taking shape" in g["message"]
+    assert [c for c in engine.router.mock.calls if c[0] == "companion"] == []       # no model wrote it
+
+
+def test_returning_greeting_only_with_real_history(engine, worker, store):
+    nid = make(engine, "Teach me binary search")
+    build_all(engine, worker, nid)
+    sid = store.open_session("L1")
+    store.close_session(sid, "Did chapter 1.") if hasattr(store, "close_session") else None
+    g = engine.companion_open("L1", nid)
+    assert (not g["is_first_session"]) == store.has_history("L1")
+    store.add_mistake("L1", "mixes up index and value")
+    g = engine.companion_open("L1", nid)
+    assert not g["is_first_session"] and g["message"].startswith("Welcome back") and "mixes up index and value" in g["message"]
+
+
+def test_unverified_chapter_lists_its_open_claims_and_recheck_can_clear_them(engine, worker, store):
+    engine.router.mock.script("critic", [{"verdict": "revise", "issues": [{"step": "notes", "problem": "Claim X has no support", "source_ref": "nope"}], "confidence": .8}] * 3)
+    nid = make(engine, "Teach me binary search")
+    engine.process_job(store.pending_jobs()[0]["id"])
+    cid = engine.notebook_view(nid)["chapters"][0]["id"]
+    ch = engine.chapter_view(cid)
+    assert ch["unverified"] and ch["review_issues"][0]["claim"] == "Claim X has no support"
+    assert ch["review_issues"][0]["source_status"] == "cited source not in this notebook"
+    out = engine.recheck_chapter(cid)                    # the mock Critic approves once the scripted answers are used up
+    assert out["verified"] and not engine.chapter_view(cid)["unverified"] and engine.chapter_view(cid)["review_issues"] == []
