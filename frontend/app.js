@@ -28,19 +28,17 @@ function cleanup() {
 }
 
 function topbar(right = "") {
-  $bar.innerHTML = `${S.mode === "mock" ? `<div class="demo" role="status">Demo mode: no AI model is connected, so content is a placeholder. Add GEMINI_API_KEY to generate real notebooks.</div>` : ""}
+  $bar.innerHTML = `${S.modelReady === false ? `<div class="demo" role="alert">No AI model is connected. Add GEMINI_API_KEY to the .env file and restart the server to build notebooks.</div>` : ""}
     <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${ICON.logo}<span>Aasaan</span><small lang="ta">ஆசான்</small></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
-  $bar.querySelectorAll("[data-theme-set]").forEach((b) => { b.onclick = () => { setTheme(b.dataset.themeSet); topbarThemeSync(); }; });
+  const tgl = $bar.querySelector("#themetoggle");
+  if (tgl) tgl.onclick = () => { const dark = themePref() !== "dark"; setTheme(dark ? "dark" : "light"); tgl.setAttribute("aria-checked", String(dark)); };
 }
 
 function themeSwitch() {
-  const cur = themePref();
-  return `<div class="theme" role="group" aria-label="Theme">${[["system", "Auto"], ["light", "Light"], ["dark", "Dark"]]
-    .map(([k, t]) => `<button type="button" data-theme-set="${k}" aria-pressed="${cur === k}" aria-label="${k === "system" ? "Match system theme" : t + " theme"}">${t}</button>`).join("")}</div>`;
-}
-function topbarThemeSync() {
-  const cur = themePref();
-  $bar.querySelectorAll("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === cur)));
+  const dark = themePref() === "dark";
+  return `<button id="themetoggle" class="tgl" type="button" role="switch" aria-checked="${dark}" aria-label="Dark mode" title="Light / dark mode"><span class="knob">
+    <svg class="sun" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5" stroke="none"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" fill="none"/></svg>
+    <svg class="moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.5 14.2A8.5 8.5 0 019.8 3.5a.6.6 0 00-.8-.7A9.5 9.5 0 1021.2 15a.6.6 0 00-.7-.8z"/></svg></span></button>`;
 }
 
 async function init() {
@@ -48,7 +46,7 @@ async function init() {
   if (!id) { id = (await api("learners", {})).learner_id; store.set("learner_id", id); }
   S.learner = id;
   try { S.session = (await api("session/open", { learner_id: id })).session_id; } catch { /* offline start is fine */ }
-  try { S.mode = (await api("health")).mode; } catch { /* ignore */ }
+  try { const h = await api("health"); S.mode = h.mode; S.modelReady = h.model_ready; } catch { /* ignore */ }
   window.addEventListener("hashchange", route);
   route();
 }
@@ -180,7 +178,7 @@ async function workspace(nid, cid) {
   $app.innerHTML = `<div class="ws" id="ws" data-tab="course" data-view="${store.get("view:" + nid) || "course"}">
     <section class="board" id="board" aria-label="Course">
       <div class="board-top">
-        <div class="vseg" role="tablist" aria-label="Whiteboard view"><button role="tab" id="vt-course" aria-selected="true">Course</button><button role="tab" id="vt-res" aria-selected="false">Resources</button></div>
+        <div class="vseg" role="group" aria-label="Sections"><button id="vt-course" aria-pressed="true">Course</button><button id="vt-res" aria-pressed="false">Resources</button><span class="vsep" aria-hidden="true"></span><button id="vt-chat" aria-pressed="true" aria-keyshortcuts="Control+." title="Show or hide the chat (Ctrl+.)">Chat<i class="dot" id="chatdot" hidden></i></button></div>
       </div>
       <div id="courseview">
         <div class="nbhead"><div class="cover" id="cover"></div><div><h1 id="nbtitle"><span class="bar-s w60"></span></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
@@ -195,7 +193,9 @@ async function workspace(nid, cid) {
       <header class="chat-h"><span class="chat-name">${ICON.logo} Aasaan</span>
         <button class="iconbtn" id="dissolve" aria-label="Hide chat" aria-keyshortcuts="Control+." title="Hide chat (Ctrl+.)">${ICON.right}</button></header>
       <div class="msgs" id="msgs" role="log" aria-live="polite" aria-label="Conversation"></div>
+      <button class="jump" id="jump" type="button" hidden>New messages ↓</button>
       <div class="chat-compose" id="chatcompose">
+        <div class="suggest" id="suggest" aria-label="Suggestions"></div>
         <div class="ctxrow" id="ctxrow"></div><div class="att-row" id="chatatts"></div>
         <div class="chat-input"><textarea id="chatinput" rows="1" placeholder="Ask about your course, or add a file or link…" aria-label="Message Aasaan"></textarea>
           <div class="toolbar"><button class="iconbtn" id="chatattach" type="button" aria-label="Attach files">${ICON.clip}</button>
@@ -204,7 +204,6 @@ async function workspace(nid, cid) {
         <input id="chatfile" type="file" aria-label="Choose files to send" accept="image/*,application/pdf,.txt,.md,text/plain" multiple hidden>
       </div>
     </aside>
-    <button class="chatfab" id="chatfab" aria-label="Open chat" aria-keyshortcuts="Control+." title="Open chat (Ctrl+.)"><span>${ICON.logo}</span><i class="dot" id="chatdot" hidden></i></button>
     <nav class="tabbar" id="tabbar" aria-label="Sections"><button data-tab="course" aria-current="true">Course</button><button data-tab="resources">Resources</button><button data-tab="chat">Chat<i class="dot" id="tabdot" hidden></i></button></nav>
   </div>`;
   wirePanes(nid);
@@ -216,7 +215,7 @@ async function workspace(nid, cid) {
   S.res = createResources({ nid, api, toast, openChapter: (id) => { document.getElementById("vt-course").click(); loadChapter(id, false, false); }, isVisible: () => !document.getElementById("resview").hidden });
   S.res.refresh(true);
   S.chat = createChat({
-    nid, learner: S.learner, api, toast, getChapterId: () => S.chapter?.id || null, getSources: () => S.nb?.sources || [],
+    nid, learner: S.learner, api, toast, getChapterId: () => S.chapter?.id || null, getChapterTitle: () => S.chapter?.title || "", getSources: () => S.nb?.sources || [],
     isOpen: () => !S.panes.closed() || matchMedia("(max-width: 860px)").matches && document.getElementById("ws")?.dataset.tab === "chat",
     notifyUnread: () => { document.getElementById("chatdot").hidden = false; document.getElementById("tabdot").hidden = false; },
     openChat: () => S.panes.open(), onChip: chatChip, afterEdit: () => api("notebooks/" + nid).then(onSnapshot).catch(() => {}), wireMic: (btn, onText) => wireMic(btn, onText, () => lang()),
@@ -253,19 +252,19 @@ function settleCourse(cid) {
 }
 
 function wirePanes(nid) {
-  const ws = document.getElementById("ws"), div = document.getElementById("divider"), pane = document.getElementById("chatpane"), fab = document.getElementById("chatfab");
+  const ws = document.getElementById("ws"), div = document.getElementById("divider"), pane = document.getElementById("chatpane"), chatBtn = document.getElementById("vt-chat");
   const prefs = wsPrefs(nid);
   const apply = () => {
     ws.style.setProperty("--board", prefs.w + "%");
     ws.classList.toggle("chat-closed", prefs.closed);
-    pane.inert = prefs.closed && !matchMedia("(max-width: 860px)").matches; fab.hidden = !prefs.closed;
+    pane.inert = prefs.closed && !matchMedia("(max-width: 860px)").matches; chatBtn.setAttribute("aria-pressed", String(!prefs.closed));
     div.hidden = prefs.closed; div.setAttribute("aria-valuenow", String(Math.round(prefs.w)));
   };
   S.panes = { closed: () => prefs.closed, open: () => { if (matchMedia("(max-width: 860px)").matches) document.querySelector('#tabbar [data-tab="chat"]').click(); else setClosed(false); } };
-  const setClosed = (c) => { prefs.closed = c; wsSave(nid, prefs); apply(); if (c) fab.focus(); else { document.getElementById("chatdot").hidden = true; (document.getElementById("chatinput") || pane).focus?.(); } };
+  const setClosed = (c) => { prefs.closed = c; wsSave(nid, prefs); apply(); if (c) chatBtn.focus(); else { document.getElementById("chatdot").hidden = true; (document.getElementById("chatinput") || pane).focus?.(); } };
   const setW = (w) => { prefs.w = Math.max(30, Math.min(80, w)); wsSave(nid, prefs); apply(); };
   document.getElementById("dissolve").onclick = () => setClosed(true);
-  fab.onclick = () => setClosed(false);
+  chatBtn.onclick = () => setClosed(!prefs.closed);
   div.onpointerdown = (e) => {
     e.preventDefault(); div.setPointerCapture(e.pointerId); ws.classList.add("dragging");
     const move = (ev) => { const r = ws.getBoundingClientRect(); setW(((ev.clientX - r.left) / r.width) * 100); };
@@ -284,8 +283,8 @@ function wirePanes(nid) {
   const view = (v) => {
     ws.dataset.view = v; store.set("view:" + nid, v);
     document.getElementById("courseview").hidden = v !== "course"; document.getElementById("resview").hidden = v !== "resources";
-    document.getElementById("vt-course").setAttribute("aria-selected", String(v === "course"));
-    if (v === "resources") S.res?.refresh(true); document.getElementById("vt-res").setAttribute("aria-selected", String(v === "resources"));
+    document.getElementById("vt-course").setAttribute("aria-pressed", String(v === "course"));
+    if (v === "resources") S.res?.refresh(true); document.getElementById("vt-res").setAttribute("aria-pressed", String(v === "resources"));
   };
   document.getElementById("vt-course").onclick = () => view("course"); document.getElementById("vt-res").onclick = () => { view("resources"); S.res?.refresh(true); };
   view(ws.dataset.view === "resources" ? "resources" : "course");
@@ -408,7 +407,7 @@ async function loadChapter(cid, keepScroll = false, auto = false) {
   const main = document.getElementById("main"); if (!main) return;
   try {
     const ch = await api("chapters/" + cid);
-    S.chapter = ch; S.quiz = null;
+    S.chapter = ch; S.quiz = null; S.chat?.setFocus(ch.title);
     history.replaceState(null, "", `#/n/${ch.notebook_id}/ch/${cid}`);
     if (ch.status !== "ready") api(`chapters/${cid}/prioritize`, {}).catch(() => {});  // jump the queue
     else if (!auto) api(`chapters/${cid}/open`, {}).catch(() => {});   // landing on a chapter automatically is not "starting" it

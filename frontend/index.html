@@ -6,8 +6,8 @@
   <title>Aasaan</title>
   <meta name="description" content="Aasaan builds a complete notebook course for any goal. Learning made aasaan.">
   <script>
-    // Set the theme before first paint (no flash). "system" = no attribute: the OS setting decides.
-    try { var t = localStorage.getItem("aasaan_theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+    // Set the theme before first paint (no flash). Light is the default; only an explicit "dark" changes it.
+    try { if (localStorage.getItem("aasaan_theme") === "dark") document.documentElement.setAttribute("data-theme", "dark"); } catch (e) {}
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
