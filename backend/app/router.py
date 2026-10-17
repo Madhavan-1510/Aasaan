@@ -36,6 +36,8 @@ from .providers.openrouter import OpenRouterProvider
 from .providers.sarvam import SarvamClient
 from .providers.sarvam_chat import SarvamChatProvider
 from .providers.typesafe import TypeSafeClient, noul
+from .resilience import CircuitBreaker, EventSink, scrub
+from .tools import Chaos
 
 log = logging.getLogger("aasaan.router")
 
@@ -96,6 +98,7 @@ class ModelRouter:
         # mode: "mock" = every chat model is served by the offline MockProvider (tests, UI work).
         self.mode = mode or os.environ.get("AASAAN_MODE") or ("live" if os.environ.get("GEMINI_API_KEY") else "mock")
         self.killed: set[str] = set()  # model names forced to fail (demo: "kill the primary")
+        self.chaos = Chaos.from_env()  # AASAAN_CHAOS="model:jev=fail,tool:commons=fail" (shared with the ToolRunner)
         self.mock = MockProvider()
         p = self.cfg.get("providers", {})
         self.providers: dict[str, Provider] = {
@@ -115,11 +118,11 @@ class ModelRouter:
         self._sem = threading.BoundedSemaphore(max(1, limit))
         # circuit breaker: a model that keeps timing out or failing server-side is skipped for a cooldown, so one slow
         # model does not add its full timeout to every call (it is retried after the cooldown)
-        self._consec_fail: dict[str, int] = {}
-        self._open_until: dict[str, float] = {}
+        self._breakers: dict[str, CircuitBreaker] = {}   # shared implementation: app/resilience.py
         self.breaker_threshold = int(self.defaults.get("circuit_threshold", 2))
         self.breaker_cooldown_s = float(self.defaults.get("circuit_cooldown_s", 90))
         self.slow_call_s = float(self.defaults.get("slow_call_s", 40))
+        self.sink = EventSink(store, self.defaults.get("log_events", True))
 
     # ------------------------------------------------------------ admin hooks
     def kill(self, model: str) -> None:
@@ -134,15 +137,7 @@ class ModelRouter:
     # ----------------------------------------------------------------- events
     def _event(self, run_id: str, agent: str, model: str, step: int, status: str, latency_ms: int,
                validation: str, summary: str, error: str = "") -> None:
-        ev = {
-            "run_id": run_id, "ts": datetime.now(timezone.utc).isoformat(), "agent": agent,
-            "model_used": model, "fallback_step": step, "status": status,
-            "latency_ms": latency_ms, "validation": validation, "summary": summary[:300], "error": error[:600],
-        }
-        if status in ("retry", "fallback", "failed"):  # never silent: say WHY in the server log
-            log.warning("[aasaan] %s step %d (%s) -> %s: %s", agent, step, model, status, error or summary)
-        if self.store and self.defaults.get("log_events", True):
-            self.store.log_event(ev)
+        self.sink.emit(agent, model, step, status, latency_ms, validation, summary, error, run_id=run_id)
 
     def _cache_key(self, model_id: str, prompt: str, images) -> Optional[str]:
         """Every live model call is cached by input hash, so retries and repeated runs are cheap."""
@@ -154,20 +149,23 @@ class ModelRouter:
             h.update(mime.encode() + hashlib.sha256(data).digest())
         return "llm:" + h.hexdigest()
 
+    def _breaker(self, model: str) -> CircuitBreaker:
+        br = self._breakers.get(model)
+        if br is None:
+            br = self._breakers[model] = CircuitBreaker(self.breaker_threshold, self.breaker_cooldown_s, model)
+        br.threshold, br.cooldown_s = self.breaker_threshold, self.breaker_cooldown_s  # picks up later tuning
+        return br
+
     def circuit_open(self, model: str) -> float:
         """Seconds left before a tripped model is tried again (0 = closed)."""
-        return max(0.0, self._open_until.get(model, 0.0) - time.time())
+        return self._breaker(model).open_remaining()
 
     def _record(self, model: str, ok: bool) -> None:
+        br = self._breaker(model)
         if ok:
-            self._consec_fail[model] = 0
-            self._open_until.pop(model, None)
-            return
-        n = self._consec_fail.get(model, 0) + 1
-        self._consec_fail[model] = n
-        if n >= self.breaker_threshold:
-            self._open_until[model] = time.time() + self.breaker_cooldown_s
-            log.warning("[aasaan] circuit OPEN for %s after %d consecutive failures; skipping it for %.0fs", model, n, self.breaker_cooldown_s)
+            br.record_success()
+        elif br.record_failure():
+            log.warning("[aasaan] circuit OPEN for %s after %d consecutive failures; skipping it for %.0fs", model, br.consecutive, br.cooldown_s)
 
     def note(self, agent: str, status: str, summary: str, error: str = "") -> None:
         """Record a non-call event (for example a chapter shipped unverified) with its reason."""
@@ -232,11 +230,14 @@ class ModelRouter:
             if step in self.killed:
                 self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label, "model killed (admin switch)")
                 continue
+            if self.chaos.mode_for("model", step):
+                self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label, f"chaos: forced {self.chaos.mode_for('model', step)} (AASAAN_CHAOS)")
+                continue
 
             left = self.circuit_open(step)
             if left > 0:
                 self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label,
-                            f"circuit open: {step} failed {self._consec_fail.get(step, 0)} times in a row; skipped for another {left:.0f}s")
+                            f"circuit open: {step} failed {self._breaker(step).consecutive} times in a row; skipped for another {left:.0f}s")
                 continue
             provider, model_id = self._provider_for(step)
             thinking = self.cfg["models"][step].get("thinking_level")
@@ -304,6 +305,9 @@ class ModelRouter:
         run_id, label = str(uuid.uuid4()), summary or role
         if jev_step in self.killed:
             self._event(run_id, role, jev_step, 0, "fallback", 0, "fail", label, "model killed (admin switch)")
+            return None
+        if self.chaos.mode_for("model", jev_step):
+            self._event(run_id, role, jev_step, 0, "fallback", 0, "fail", label, f"chaos: forced {self.chaos.mode_for('model', jev_step)} (AASAAN_CHAOS)")
             return None
         timeout = self.cfg["roles"][role].get("timeout_s", self.defaults.get("timeout_s", 30))
         t0 = time.perf_counter()
@@ -377,7 +381,7 @@ class ModelRouter:
                     return name, {**base, "status": "skipped", "note": "needs an audio clip; exercised on first voice use"}
                 return name, {**base, "status": "ok", "latency_ms": int((time.perf_counter() - t0) * 1000)}
             except Exception as e:
-                return name, {**base, "status": "failed", "error": str(e)[:400],
+                return name, {**base, "status": "failed", "error": scrub(e)[:400],
                               "latency_ms": int((time.perf_counter() - t0) * 1000)}
 
         with ThreadPoolExecutor(max_workers=6) as pool:
@@ -392,7 +396,7 @@ class ModelRouter:
                                                "error": "" if hits else "no grounding results returned",
                                                "latency_ms": int((time.perf_counter() - t0) * 1000)}
             except Exception as e:
-                features["grounded_search"] = {"status": "failed", "error": str(e)[:300]}
+                features["grounded_search"] = {"status": "failed", "error": scrub(e)[:300]}
         report = {"mode": self.mode, "ok": not failed, "failed": failed, "models": results, "features": features,
                   "circuit_open": {m: round(self.circuit_open(m)) for m in models if self.circuit_open(m) > 0}}
         self._health_cache = (time.time(), report)
@@ -406,8 +410,7 @@ class ModelRouter:
             err = (res.get("error") or "").lower()
             unhealthy = res["status"] == "failed" and ("timed out" in err or " http 5" in err or "http 503" in err)
             if res.get("kind") == "chat" and ((res["status"] == "ok" and res.get("latency_ms", 0) / 1000 > self.slow_call_s) or unhealthy):
-                self._consec_fail[name] = self.breaker_threshold
-                self._open_until[name] = time.time() + cooldown_s
+                self._breaker(name).trip(cooldown_s)
                 demoted.append(name)
                 log.warning("[aasaan] %s is slow or unhealthy at startup (%.0fs, %s): skipping it for %.0fs", name, res.get("latency_ms", 0) / 1000,
                             res["status"], cooldown_s)

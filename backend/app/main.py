@@ -23,7 +23,9 @@ from pydantic import BaseModel
 
 from .db import Store
 from .engine import Engine, UserError
+from .resilience import mask_key
 from .router import ModelRouter
+from .tools import ToolRunner
 from .worker import Worker
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,12 +85,17 @@ class KillIn(BaseModel):
     model: Optional[str] = None
 
 
+class ChaosIn(BaseModel):
+    spec: str = ""
+
+
 def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_test_on_start: Optional[bool] = None,
                start_worker: bool = True, upload_dir: Optional[str] = None) -> FastAPI:
     load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = Store(db_path or os.environ.get("AASAAN_DB") or str(ROOT / "data" / "aasaan.db"))
     router = ModelRouter(store=store, mode=mode)
+    tools = ToolRunner(store, router.sink, router.chaos)
     engine = Engine(store, router, upload_dir=upload_dir or os.environ.get("AASAAN_UPLOADS") or str(ROOT / "data" / "uploads"))
     worker = Worker(engine)
     nb_per_hour = int(os.environ.get("AASAAN_NB_PER_HOUR", "12"))
@@ -108,7 +115,7 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
             task.cancel()
 
     app = FastAPI(title="Aasaan", lifespan=lifespan)
-    app.state.engine, app.state.router, app.state.store, app.state.worker = engine, router, store, worker
+    app.state.engine, app.state.router, app.state.store, app.state.worker, app.state.tools = engine, router, store, worker, tools
 
     @app.middleware("http")
     async def no_cache_ui(request, call_next):  # always serve the latest UI files
@@ -140,6 +147,20 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
     def health_models(refresh: bool = False):
         """Calls every configured model once; ok / failed (with the error) per model. Cached for 60 s."""
         return router.self_test(force=refresh)
+
+    @app.get("/api/health/tools")
+    def health_tools():
+        """State of every tool: ok, degraded, open_circuit or disabled, with last error, last success and masked keys."""
+        decision = {}
+        for name, mc in router.cfg["models"].items():
+            if mc.get("kind") != "decision":
+                continue
+            env = router.cfg["providers"].get(mc["provider"], {}).get("api_key_env")
+            left = router.circuit_open(name)
+            decision[name] = {"state": "disabled" if (env and not os.environ.get(env)) else ("open_circuit" if left > 0 else "ok"),
+                              "model_id": mc["id"], "keys": [mask_key(env)] if env else [], "chaos": router.chaos.mode_for("model", name),
+                              "killed": name in router.killed}
+        return {"tools": tools.health(), "decision_models": decision, "chaos": router.chaos.describe(), "mode": router.mode}
 
     # ============================================================== learners
     @app.post("/api/learners")
@@ -280,6 +301,18 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
             raise HTTPException(400, "model required")
         router.kill(body.model)
         return {"killed": sorted(router.killed)}
+
+    @app.get("/api/admin/chaos")
+    def get_chaos(request: Request):
+        require_admin(request)
+        return {"spec": router.chaos.describe()}
+
+    @app.post("/api/admin/chaos")
+    def set_chaos(request: Request, body: ChaosIn):
+        """e.g. {"spec": "tool:commons=fail,model:jev=fail"}; empty string clears it."""
+        require_admin(request)
+        router.chaos.set(body.spec)
+        return {"spec": router.chaos.describe()}
 
     @app.post("/api/admin/revive")
     def revive(request: Request, body: KillIn):
