@@ -123,6 +123,10 @@ class Chaos:
         return ",".join(f"{k}:{n}={m}" for (k, n), m in sorted(self.rules.items()))
 
 
+# Failure kinds that mean "the tool itself is unhealthy" (they feed the breaker and the degraded state).
+OUTAGE_KINDS = {"server", "timeout", "rate_limit", "auth", "chaos"}
+
+
 # ------------------------------------------------------------------------------- specs
 @dataclass
 class ToolSpec:
@@ -144,7 +148,6 @@ class ToolSpec:
 
 
 DEFAULT_SPECS: dict[str, ToolSpec] = {s.name: s for s in [
-    ToolSpec("web_fetch", "Plain page fetch + text extraction (tier 0)", rate_per_s=8, burst=8, retries=1, cache_ttl_s=24 * 3600),
     ToolSpec("jina", "Jina Reader (tier 1)", key_env="JINA_API_KEY", rate_per_s=2, burst=2, budget_env="JINA_MAX_CALLS_PER_NOTEBOOK",
              budget_default=40, cache_ttl_s=24 * 3600),
     ToolSpec("firecrawl", "Firecrawl scrape (last page tier) and search (discovery fallback)", key_env="FIRECRAWL_API_KEY", key_required=True,
@@ -156,8 +159,9 @@ DEFAULT_SPECS: dict[str, ToolSpec] = {s.name: s for s in [
     ToolSpec("openverse", "Openverse image search (anonymous is very tight: 20/min, 200/day)", key_env="OPENVERSE_CLIENT_ID",
              extra_keys=("OPENVERSE_CLIENT_SECRET",), rate_per_s=0.3, burst=3, retries=0, budget_env="OPENVERSE_MAX_CALLS_PER_NOTEBOOK",
              budget_default=6, cache_ttl_s=14 * 86400),
-    ToolSpec("youtube", "YouTube Data API search and oEmbed", key_env="YOUTUBE_API_KEY", rate_per_s=5, burst=5,
+    ToolSpec("youtube", "YouTube Data API search", key_env="YOUTUBE_API_KEY", key_required=True, rate_per_s=5, burst=5,
              budget_env="YOUTUBE_MAX_CALLS_PER_NOTEBOOK", budget_default=40, cache_ttl_s=3 * 86400),
+    ToolSpec("oembed", "YouTube oEmbed (does this video exist and embed?)", rate_per_s=5, burst=5, cache_ttl_s=3 * 86400),
     ToolSpec("codeforces", "Codeforces problems (not integrated in this codebase yet)", integrated=False),
 ]}
 
@@ -286,7 +290,9 @@ class ToolRunner:
 
         def finish_fail(err: ToolError, status: str = "fallback") -> ToolResult:
             st.errors += 1
-            st.last_error, st.last_error_kind, st.last_error_ts, st.last_ok = scrub(err.message)[:300], err.kind, time.time(), False
+            st.last_error, st.last_error_kind, st.last_error_ts = scrub(err.message)[:300], err.kind, time.time()
+            if err.kind in OUTAGE_KINDS:
+                st.last_ok = False
             self.sink.emit(f"tool:{tool}", tool, 0, status, ms(), "fail", label, f"[{err.kind}] {err.message}", run_id)
             return ToolResult(False, None, ToolError(err.kind, scrub(err.message)[:300], err.retryable), tool, ms())
 
@@ -363,11 +369,13 @@ class ToolRunner:
             self.sleep(backoff_delay(attempt, retry_after=last.retry_after))
 
         assert last is not None
-        if last.kind not in ("unconfigured", "budget"):
-            if br.record_failure():
-                log.warning("[aasaan] circuit OPEN for tool %s after %d consecutive failures; skipping it for %.0fs", tool, br.consecutive, br.cooldown_s)
+        outage = last.kind in OUTAGE_KINDS   # a thin page or a 404 video is about that page, not about the tool being down
+        if outage and br.record_failure():
+            log.warning("[aasaan] circuit OPEN for tool %s after %d consecutive failures; skipping it for %.0fs", tool, br.consecutive, br.cooldown_s)
         st.errors += 1
-        st.last_error, st.last_error_kind, st.last_error_ts, st.last_ok = scrub(last.message)[:300], last.kind, time.time(), False
+        st.last_error, st.last_error_kind, st.last_error_ts = scrub(last.message)[:300], last.kind, time.time()
+        if outage:
+            st.last_ok = False
         if cached:
             self.sink.emit(f"tool:{tool}", tool, 0, "fallback", ms(), "pass", f"{label} (stale cache)", f"[{last.kind}] {last.message}", run_id)
             return ToolResult(True, cached[0], None, tool, ms(), cached=True, stale=True)

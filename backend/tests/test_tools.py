@@ -214,7 +214,7 @@ def client(tmp_path):
 
 def test_health_tools_endpoint(client, monkeypatch):
     rep = client.get("/api/health/tools").json()
-    assert {"web_fetch", "jina", "firecrawl", "wikipedia", "commons", "openverse", "youtube", "codeforces"} <= set(rep["tools"])
+    assert {"jina", "firecrawl", "wikipedia", "commons", "openverse", "youtube", "oembed", "codeforces"} <= set(rep["tools"])
     assert rep["tools"]["firecrawl"]["state"] == "disabled" and rep["tools"]["wikipedia"]["state"] == "ok"
     assert "jev" in rep["decision_models"] and rep["decision_models"]["jev"]["keys"][0]["env"] == "TYPESAFE_API_KEY"
     assert "masked" in rep["tools"]["firecrawl"]["keys"][0]

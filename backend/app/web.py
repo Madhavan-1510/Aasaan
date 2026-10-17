@@ -28,6 +28,8 @@ from urllib.parse import quote, unquote, urlparse
 
 import httpx
 
+from .tools import ToolFailure, ToolResult, ToolRunner, check_response
+
 log = logging.getLogger("aasaan.web")
 
 MIN_TEXT_CHARS = 300
@@ -51,6 +53,38 @@ def http_post(url: str, *, headers: Optional[dict] = None, json: Any = None, tim
 
 
 _resolve = socket.getaddrinfo  # patchable in tests
+
+# ---- ToolRunner: Wikipedia, Commons, Jina, Firecrawl, YouTube and oEmbed calls go through it (events, retries, breakers, budgets).
+# Plain page fetches and link verification talk to arbitrary hosts, where a dead page is normal, so they stay direct.
+RUNNER: Optional[ToolRunner] = None
+
+
+def set_runner(runner: Optional[ToolRunner]) -> None:
+    global RUNNER
+    RUNNER = runner
+
+
+def tool(name: str, fn, **kw) -> ToolResult:
+    global RUNNER
+    if RUNNER is None:
+        RUNNER = ToolRunner(None)  # standalone use (no store): events are dropped, breakers and budgets still apply
+    return RUNNER.run(name, fn, **kw)
+
+
+def _json(resp, what: str):
+    check_response(resp, what)
+    try:
+        return resp.json()
+    except ValueError:
+        raise ToolFailure("invalid", f"{what}: response was not JSON", False)
+
+
+def _thin(min_chars: int):
+    def check(d: dict) -> None:
+        n = len((d or {}).get("text", ""))
+        if n < min_chars:
+            raise ToolFailure("thin", f"only {n} characters of content (need {min_chars})", False)
+    return check
 
 
 def extract_urls(text: str) -> list[str]:
@@ -191,34 +225,33 @@ def fetch_page(url: str, store=None) -> PageResult:
                 errors.append(f"tier0: HTTP {r.status_code} {ctype}")
         except Exception as e:
             errors.append(f"tier0: {type(e).__name__}: {e}")
-        # Tier 1: Jina Reader
-        try:
+        # Tier 1: Jina Reader (works without a key; JINA_API_KEY raises the quota)
+        def jina():
             headers = {"Accept": "text/plain"}
             if os.environ.get("JINA_API_KEY"):
                 headers["Authorization"] = f"Bearer {os.environ['JINA_API_KEY']}"
             r = http_get("https://r.jina.ai/" + url, headers=headers, timeout=15)
-            if r.status_code == 200:
-                title, body = _parse_jina(r.text)
-                if len(body) >= MIN_TEXT_CHARS:
-                    return _cache(store, PageResult(True, url, title, body[:20000], "", 1))
-                errors.append(f"tier1: only {len(body)} chars")
-            else:
-                errors.append(f"tier1: HTTP {r.status_code}")
-        except Exception as e:
-            errors.append(f"tier1: {type(e).__name__}: {e}")
-        # Tier 2: Firecrawl (only with a key)
-        if os.environ.get("FIRECRAWL_API_KEY"):
-            try:
-                r = http_post("https://api.firecrawl.dev/v2/scrape",
-                              headers={"Authorization": f"Bearer {os.environ['FIRECRAWL_API_KEY']}"},
-                              json={"url": url, "formats": ["markdown"], "onlyMainContent": True}, timeout=40)
-                data = (r.json() or {}).get("data", {}) if r.status_code == 200 else {}
-                md = (data.get("markdown") or "").strip()
-                if len(md) >= MIN_TEXT_CHARS:
-                    return _cache(store, PageResult(True, url, (data.get("metadata") or {}).get("title", ""), md[:20000], "", 2))
-                errors.append(f"tier2: HTTP {r.status_code}, {len(md)} chars")
-            except Exception as e:
-                errors.append(f"tier2: {type(e).__name__}: {e}")
+            check_response(r, "jina")
+            title, body = _parse_jina(r.text)
+            return {"title": title, "text": body}
+
+        res = tool("jina", jina, validate=_thin(MIN_TEXT_CHARS), summary=f"jina read {host}")
+        if res.ok:
+            return _cache(store, PageResult(True, url, res.data["title"], res.data["text"][:20000], "", 1))
+        errors.append(f"tier1 jina: [{res.error.kind}] {res.error.message}")
+        # Tier 2: Firecrawl (last tier; needs FIRECRAWL_API_KEY; capped per notebook; off for the session after a 401/402)
+        def firecrawl():
+            r = http_post("https://api.firecrawl.dev/v2/scrape", headers={"Authorization": f"Bearer {os.environ.get('FIRECRAWL_API_KEY', '')}"},
+                          json={"url": url, "formats": ["markdown"], "onlyMainContent": True}, timeout=40)
+            check_response(r, "firecrawl scrape")
+            data = (r.json() or {}).get("data", {})
+            return {"title": (data.get("metadata") or {}).get("title", ""), "text": (data.get("markdown") or "").strip()}
+
+        res = tool("firecrawl", firecrawl, validate=_thin(MIN_TEXT_CHARS), summary=f"firecrawl scrape {host}")
+        if res.ok:
+            return _cache(store, PageResult(True, url, res.data["title"], res.data["text"][:20000], "", 2))
+        if res.error.kind != "unconfigured":
+            errors.append(f"tier2 firecrawl: [{res.error.kind}] {res.error.message}")
     msg = "I couldn't read that page, please paste the text"
     log.warning("[aasaan] fetch_page failed for %s: %s", url, "; ".join(errors))
     return PageResult(False, url, error=f"{msg} ({'; '.join(errors)[:300]})")
@@ -271,36 +304,26 @@ def _strip_tags(s: str) -> str:
 
 # -------------------------------------------------------------------- discovery
 def discover_wikipedia(query: str, n: int = 3) -> list[Candidate]:
-    try:
-        r = http_get("https://en.wikipedia.org/w/api.php",
-                     params={"action": "opensearch", "search": query, "limit": n, "namespace": 0, "format": "json"})
-        data = r.json()
-        return [Candidate(f"w{i}", "link", u, t, "wikipedia.org") for i, (t, u) in enumerate(zip(data[1], data[3]))]
-    except Exception as e:
-        log.warning("[aasaan] wikipedia discovery failed for %r: %s", query, e)
-        return []
+    def search():
+        data = _json(http_get("https://en.wikipedia.org/w/api.php",
+                              params={"action": "opensearch", "search": query, "limit": n, "namespace": 0, "format": "json"}), "wikipedia search")
+        return {"hits": [{"title": t, "url": u} for t, u in zip(data[1], data[3])]}
+
+    res = tool("wikipedia", search, cache_key=f"search:{n}:{query.lower()}", summary=f"wikipedia search '{query[:40]}'")
+    return [Candidate(f"w{i}", "link", h["url"], h["title"], "wikipedia.org") for i, h in enumerate(res.value_or({}).get("hits", []))]
 
 
 def discover_youtube(query: str, n: int = 4) -> list[Candidate]:
-    key = os.environ.get("YOUTUBE_API_KEY")
-    if not key:
-        return []
-    try:
-        r = http_get("https://www.googleapis.com/youtube/v3/search",
-                     params={"part": "snippet", "q": query, "type": "video", "maxResults": n, "videoEmbeddable": "true",
-                             "safeSearch": "strict", "key": key})
-        if r.status_code != 200:
-            log.warning("[aasaan] youtube search HTTP %s: %s", r.status_code, r.text[:200])
-            return []
-        out = []
-        for i, it in enumerate(r.json().get("items", [])):
-            vid = it["id"]["videoId"]
-            out.append(Candidate(f"y{i}", "video", f"https://www.youtube.com/watch?v={vid}", it["snippet"]["title"],
-                                 it["snippet"].get("channelTitle", "YouTube"), extra={"video_id": vid}))
-        return out
-    except Exception as e:
-        log.warning("[aasaan] youtube discovery failed for %r: %s", query, e)
-        return []
+    def search():
+        data = _json(http_get("https://www.googleapis.com/youtube/v3/search", params={
+            "part": "snippet", "q": query, "type": "video", "maxResults": n, "videoEmbeddable": "true", "safeSearch": "strict",
+            "key": os.environ.get("YOUTUBE_API_KEY", "")}), "youtube search")
+        return {"videos": [{"id": it["id"]["videoId"], "title": it["snippet"]["title"], "channel": it["snippet"].get("channelTitle", "YouTube")}
+                           for it in data.get("items", [])]}
+
+    res = tool("youtube", search, cache_key=f"search:{n}:{query.lower()}", summary=f"youtube search '{query[:40]}'")
+    return [Candidate(f"y{i}", "video", f"https://www.youtube.com/watch?v={v['id']}", v["title"], v["channel"], extra={"video_id": v["id"]})
+            for i, v in enumerate(res.value_or({}).get("videos", []))]
 
 
 def youtube_id(url: str) -> Optional[str]:
@@ -316,27 +339,30 @@ def youtube_id(url: str) -> Optional[str]:
 
 def discover_images(query: str, n: int = 4) -> list[Candidate]:
     """Wikimedia Commons first (no key), then Pexels if a key exists. Hotlinked thumbnails + attribution only."""
-    out: list[Candidate] = []
-    try:
+    def search():
         r = http_get("https://commons.wikimedia.org/w/api.php", params={
             "action": "query", "format": "json", "generator": "search", "gsrsearch": f"{query} filetype:bitmap",
             "gsrnamespace": 6, "gsrlimit": n * 2, "prop": "imageinfo", "iiprop": "url|extmetadata|mime|size", "iiurlwidth": 800})
-        pages = (r.json().get("query") or {}).get("pages") or {}
-        for i, pg in enumerate(sorted(pages.values(), key=lambda p: p.get("index", 0))):
+        pages = (_json(r, "commons search").get("query") or {}).get("pages") or {}
+        found = []
+        for pg in sorted(pages.values(), key=lambda p: p.get("index", 0)):
             ii = (pg.get("imageinfo") or [{}])[0]
             if not ii.get("thumburl") or not str(ii.get("mime", "")).startswith("image/") or ii.get("width", 0) < 400:
                 continue
             md = ii.get("extmetadata") or {}
-            artist = _strip_tags((md.get("Artist") or {}).get("value", "")) or "Unknown author"
-            lic = (md.get("LicenseShortName") or {}).get("value", "see source")
-            desc = _strip_tags((md.get("ImageDescription") or {}).get("value", ""))[:200]
-            out.append(Candidate(f"i{i}", "image", ii["thumburl"], pg.get("title", "").removeprefix("File:"),
-                                 "Wikimedia Commons", reason=desc, extra={"page_url": ii.get("descriptionurl", ""), "author": artist,
-                                                                          "license": lic}))
-            if len(out) >= n:
+            found.append({"title": pg.get("title", "").removeprefix("File:"), "url": ii["thumburl"], "page_url": ii.get("descriptionurl", ""),
+                          "author": _strip_tags((md.get("Artist") or {}).get("value", "")) or "Unknown author",
+                          "license": (md.get("LicenseShortName") or {}).get("value", "see source"),
+                          "desc": _strip_tags((md.get("ImageDescription") or {}).get("value", ""))[:200]})
+            if len(found) >= n:
                 break
-    except Exception as e:
-        log.warning("[aasaan] commons discovery failed for %r: %s", query, e)
+        return {"images": found}
+
+    out: list[Candidate] = []
+    res = tool("commons", search, cache_key=f"search:{n}:{query.lower()}", summary=f"commons search '{query[:40]}'")
+    for i, im in enumerate(res.value_or({}).get("images", [])):
+        out.append(Candidate(f"i{i}", "image", im["url"], im["title"], "Wikimedia Commons", reason=im["desc"],
+                             extra={"page_url": im["page_url"], "author": im["author"], "license": im["license"]}))
     key = os.environ.get("PEXELS_API_KEY")
     if key and len(out) < n:
         try:
@@ -356,30 +382,38 @@ def wikipedia_lead_image(page_url: str) -> Optional[Candidate]:
     p = urlparse(page_url)
     if not (p.hostname or "").endswith("wikipedia.org") or not p.path.startswith("/wiki/"):
         return None
-    try:
-        r = http_get(f"https://{p.hostname}/api/rest_v1/page/summary/{p.path.removeprefix('/wiki/')}")
-        if r.status_code != 200:
-            return None
-        src = ((r.json().get("originalimage") or r.json().get("thumbnail") or {}).get("source")) or ""
-        if "/wikipedia/commons/" not in src:
-            return None
-        segs = urlparse(src).path.split("/")
-        name = unquote(segs[-2] if "/thumb/" in src else segs[-1])
+    title = p.path.removeprefix("/wiki/")
+
+    def summary():
+        d = _json(http_get(f"https://{p.hostname}/api/rest_v1/page/summary/{title}"), "wikipedia summary")
+        return {"src": ((d.get("originalimage") or d.get("thumbnail") or {}).get("source")) or ""}
+
+    s = tool("wikipedia", summary, cache_key=f"summary:{p.hostname}:{title}", summary=f"wikipedia summary {title[:40]}")
+    src = s.value_or({}).get("src", "")
+    if "/wikipedia/commons/" not in src:
+        return None
+    segs = urlparse(src).path.split("/")
+    name = unquote(segs[-2] if "/thumb/" in src else segs[-1])
+
+    def fileinfo():
         ci = http_get("https://commons.wikimedia.org/w/api.php", params={
             "action": "query", "format": "json", "titles": f"File:{name}", "prop": "imageinfo",
             "iiprop": "url|extmetadata|mime|size", "iiurlwidth": 800})
-        pages = (ci.json().get("query") or {}).get("pages") or {}
+        pages = (_json(ci, "commons file info").get("query") or {}).get("pages") or {}
         ii = (next(iter(pages.values()), {}).get("imageinfo") or [{}])[0]
-        if not ii.get("thumburl") or not str(ii.get("mime", "")).startswith("image/") or ii.get("width", 0) < 300:
-            return None
-        md = ii.get("extmetadata") or {}
-        return Candidate("li0", "image", ii["thumburl"], name.rsplit(".", 1)[0].replace("_", " "), "Wikimedia Commons",
-                         reason=_strip_tags((md.get("ImageDescription") or {}).get("value", ""))[:200],
-                         extra={"page_url": ii.get("descriptionurl", ""), "author": _strip_tags((md.get("Artist") or {}).get("value", "")) or "Unknown author",
-                                "license": (md.get("LicenseShortName") or {}).get("value", "see source"), "lead_of": page_url})
-    except Exception as e:
-        log.warning("[aasaan] lead image lookup failed for %s: %s", page_url, e)
+        if not ii.get("thumburl"):
+            raise ToolFailure("invalid", "no image info for that file", False)
+        return {"ii": ii}
+
+    f = tool("commons", fileinfo, cache_key=f"file:{name}", summary=f"commons file {name[:40]}")
+    ii = f.value_or({}).get("ii") or {}
+    if not ii.get("thumburl") or not str(ii.get("mime", "")).startswith("image/") or ii.get("width", 0) < 300:
         return None
+    md = ii.get("extmetadata") or {}
+    return Candidate("li0", "image", ii["thumburl"], name.rsplit(".", 1)[0].replace("_", " "), "Wikimedia Commons",
+                     reason=_strip_tags((md.get("ImageDescription") or {}).get("value", ""))[:200],
+                     extra={"page_url": ii.get("descriptionurl", ""), "author": _strip_tags((md.get("Artist") or {}).get("value", "")) or "Unknown author",
+                            "license": (md.get("LicenseShortName") or {}).get("value", "see source"), "lead_of": page_url})
 
 
 def discover_grounded(provider_search, model_id: str, query: str, n: int = 6) -> list[Candidate]:
@@ -455,17 +489,18 @@ def verify_video(c: Candidate) -> Candidate:
     if not vid:
         c.extra["drop"] = "not a YouTube watch URL"
         return c
-    try:
+    def oembed():
         r = http_get("https://www.youtube.com/oembed", params={"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"}, timeout=6)
-        if r.status_code != 200:
-            c.extra["drop"] = f"oEmbed HTTP {r.status_code}"
-            return c
-        data = r.json()
-        c.title, c.source = data.get("title", c.title), data.get("author_name", c.source or "YouTube")
-        c.extra["video_id"], c.url = vid, f"https://www.youtube.com/watch?v={vid}"
-        c.verified = True
-    except Exception as e:
-        c.extra["drop"] = f"{type(e).__name__}: {e}"
+        return _json(r, "oembed")
+
+    res = tool("oembed", oembed, cache_key=f"oembed:{vid}", summary=f"oembed {vid}")
+    if not res.ok:
+        c.extra["drop"] = f"oEmbed [{res.error.kind}] {res.error.message}"
+        return c
+    data = res.data
+    c.title, c.source = data.get("title", c.title), data.get("author_name", c.source or "YouTube")
+    c.extra["video_id"], c.url = vid, f"https://www.youtube.com/watch?v={vid}"
+    c.verified = True
     return c
 
 

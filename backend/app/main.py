@@ -96,7 +96,7 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
     store = Store(db_path or os.environ.get("AASAAN_DB") or str(ROOT / "data" / "aasaan.db"))
     router = ModelRouter(store=store, mode=mode)
     tools = ToolRunner(store, router.sink, router.chaos)
-    engine = Engine(store, router, upload_dir=upload_dir or os.environ.get("AASAAN_UPLOADS") or str(ROOT / "data" / "uploads"))
+    engine = Engine(store, router, upload_dir=upload_dir or os.environ.get("AASAAN_UPLOADS") or str(ROOT / "data" / "uploads"), tools=tools)
     worker = Worker(engine)
     nb_per_hour = int(os.environ.get("AASAAN_NB_PER_HOUR", "12"))
     creations: dict[str, list[float]] = {}

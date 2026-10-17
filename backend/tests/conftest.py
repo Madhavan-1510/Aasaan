@@ -67,6 +67,16 @@ def no_real_keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fresh_tool_runner(monkeypatch):
+    """Each test gets its own ToolRunner (no shared breakers or budgets) that never really sleeps between retries."""
+    from app.tools import ToolRunner
+    runner = ToolRunner(None)
+    runner.sleep = lambda s: None
+    monkeypatch.setattr(web, "RUNNER", runner)
+    return runner
+
+
+@pytest.fixture(autouse=True)
 def fake_web(monkeypatch):
     """No test touches the real network. Tests add routes to this fake when they need web results."""
     fw = FakeWeb()

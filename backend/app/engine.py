@@ -20,6 +20,7 @@ from typing import Optional
 from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, intake, quizzer, rewriter, teacher
 from .db import Store
+from .tools import ToolRunner
 from .router import AllFailed, ModelRouter
 from .schemas import (MAX_INSERTS_PER_SESSION, ChapterContent, CriticOut, IntakeOut, LearnerProfile, OutlineOut,
                       Question, QuizOut, resolve_key)
@@ -62,8 +63,11 @@ def split_request(text: str) -> tuple[Optional[str], str, list[str]]:
 
 class Engine:
     def __init__(self, store: Store, router: ModelRouter, upload_dir: str | Path = "data/uploads",
-                 retry_delay_s: float = 4.0):
+                 retry_delay_s: float = 4.0, tools: Optional[ToolRunner] = None):
         self.store, self.router = store, router
+        self.tools = tools
+        if tools is not None:
+            web.set_runner(tools)
         self.voice = Voice(router)
         self.upload_dir = Path(upload_dir)
         self.retry_delay_s = retry_delay_s
@@ -193,7 +197,16 @@ class Engine:
         self._refresh_status(nid)
 
     # ============================================================== phase 0
+    def _scope(self, nid: str):
+        """Tool calls made inside count against this notebook's per-tool budgets (e.g. Firecrawl: 20)."""
+        import contextlib
+        return self.tools.notebook_scope(nid) if self.tools else contextlib.nullcontext()
+
     def phase0(self, nid: str) -> None:
+        with self._scope(nid):
+            return self._phase0(nid)
+
+    def _phase0(self, nid: str) -> None:
         nb = self._nb(nid)
         prof = self.profile(nb["learner_id"], nb)
         warnings: list[str] = []
@@ -258,6 +271,10 @@ class Engine:
 
     # ============================================================== chapters
     def build_chapter(self, cid: int) -> None:
+        with self._scope(self._chapter(cid)["notebook_id"]):
+            return self._build_chapter(cid)
+
+    def _build_chapter(self, cid: int) -> None:
         """Curator -> Teacher <-> Critic -> Quizzer, then write all blocks and flip to ready in one transaction."""
         ch = self._chapter(cid)
         nb = self._nb(ch["notebook_id"])
