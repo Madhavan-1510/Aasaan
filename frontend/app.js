@@ -2,6 +2,7 @@
 import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, themePref, setTheme } from "./util.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderGraph, legend } from "./graph.js";
+import { createChat } from "./chat.js";
 
 const $app = document.getElementById("app");
 const $bar = document.getElementById("bar");
@@ -192,18 +193,31 @@ async function workspace(nid, cid) {
     <aside class="chatpane" id="chatpane" aria-label="Chat with Aasaan">
       <header class="chat-h"><span class="chat-name">${ICON.logo} Aasaan</span>
         <button class="iconbtn" id="dissolve" aria-label="Hide chat" aria-keyshortcuts="Control+." title="Hide chat (Ctrl+.)">${ICON.right}</button></header>
-      <div class="msgs" id="msgs" role="log" aria-live="polite"></div>
+      <div class="msgs" id="msgs" role="log" aria-live="polite" aria-label="Conversation"></div>
+      <div class="chat-compose" id="chatcompose">
+        <div class="ctxrow" id="ctxrow"></div><div class="att-row" id="chatatts"></div>
+        <div class="chat-input"><textarea id="chatinput" rows="1" placeholder="Ask about your course, or add a file or link…" aria-label="Message Aasaan"></textarea>
+          <div class="toolbar"><button class="iconbtn" id="chatattach" type="button" aria-label="Attach files">${ICON.clip}</button>
+            <button class="iconbtn" id="chatmic" type="button" aria-label="Speak your message">${ICON.mic}</button><span class="spacer"></span>
+            <button class="send" id="chatsend" type="button" aria-label="Send" disabled>${ICON.up}</button></div></div>
+        <input id="chatfile" type="file" accept="image/*,application/pdf,.txt,.md,text/plain" multiple hidden>
+      </div>
     </aside>
     <button class="chatfab" id="chatfab" aria-label="Open chat" aria-keyshortcuts="Control+." title="Open chat (Ctrl+.)"><span>${ICON.logo}</span><i class="dot" id="chatdot" hidden></i></button>
-    <nav class="tabbar" id="tabbar" aria-label="Sections"><button data-tab="course" aria-current="true">Course</button><button data-tab="resources">Resources</button><button data-tab="chat">Chat</button></nav>
+    <nav class="tabbar" id="tabbar" aria-label="Sections"><button data-tab="course" aria-current="true">Course</button><button data-tab="resources">Resources</button><button data-tab="chat">Chat<i class="dot" id="tabdot" hidden></i></button></nav>
   </div>`;
   wirePanes(nid);
   document.getElementById("finish").onclick = finishSession;
   document.getElementById("chaps").onclick = (e) => { const o = document.querySelector(".nb").classList.toggle("side-open"); e.currentTarget.setAttribute("aria-expanded", o); };
   paintShell();
-  document.getElementById("msgs").innerHTML = `<div class="msg sys">Your course is being built on the left. You can read each chapter as soon as it appears.</div>`;
   try { S.nb = await api("notebooks/" + nid); } catch (e) { fail(e); location.hash = "#/"; return; }
   renderHead(); renderSide(); renderResources(); settleCourse(cid);
+  S.chat = createChat({
+    nid, learner: S.learner, api, toast, getChapterId: () => S.chapter?.id || null, getSources: () => S.nb?.sources || [],
+    isOpen: () => !S.panes.closed() || matchMedia("(max-width: 860px)").matches && document.getElementById("ws")?.dataset.tab === "chat",
+    notifyUnread: () => { document.getElementById("chatdot").hidden = false; document.getElementById("tabdot").hidden = false; },
+    openChat: () => S.panes.open(), onChip: chatChip, wireMic: (btn, onText) => wireMic(btn, onText, () => lang()),
+  });
   api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; renderNote(); }).catch(() => {});
   connect(nid);
 }
@@ -244,6 +258,7 @@ function wirePanes(nid) {
     pane.inert = prefs.closed && !matchMedia("(max-width: 860px)").matches; fab.hidden = !prefs.closed;
     div.hidden = prefs.closed; div.setAttribute("aria-valuenow", String(Math.round(prefs.w)));
   };
+  S.panes = { closed: () => prefs.closed, open: () => { if (matchMedia("(max-width: 860px)").matches) document.querySelector('#tabbar [data-tab="chat"]').click(); else setClosed(false); } };
   const setClosed = (c) => { prefs.closed = c; wsSave(nid, prefs); apply(); if (c) fab.focus(); else { document.getElementById("chatdot").hidden = true; (document.getElementById("chatinput") || pane).focus?.(); } };
   const setW = (w) => { prefs.w = Math.max(30, Math.min(80, w)); wsSave(nid, prefs); apply(); };
   document.getElementById("dissolve").onclick = () => setClosed(true);
@@ -275,6 +290,7 @@ function wirePanes(nid) {
     const t = b.dataset.tab; ws.dataset.tab = t;
     document.querySelectorAll("#tabbar button").forEach((x) => x.toggleAttribute("aria-current", x === b));
     if (t === "course" || t === "resources") view(t);
+    if (t === "chat") { document.getElementById("tabdot").hidden = true; document.getElementById("chatdot").hidden = true; }
   });
   apply();
 }
@@ -284,10 +300,21 @@ function renderResources() {
   const el = document.getElementById("resview"); if (!el || !S.nb) return;
   const src = S.nb.sources || [];
   const kind = { text: "Pasted text", url: "Link", pdf: "PDF", image: "Image" };
-  el.innerHTML = `<h2 class="res-h">Resources</h2>` + (src.length ? `<ul class="reslist">${src.map((s) => `<li class="resitem"><span class="rk">${kind[s.kind] || s.kind}</span>
+  el.innerHTML = `<h2 class="res-h">Resources</h2>` + (src.length ? `<ul class="reslist">${src.map((s) => `<li class="resitem" data-rid="${esc(s.id)}"><span class="rk">${kind[s.kind] || s.kind}</span>
     <span class="rn">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</span>
     <span class="muted">${s.status === "partly_readable" ? "Partly readable" : s.status === "unreadable" ? "Unreadable" : "Ready"}</span></li>`).join("")}</ul>`
     : `<p class="muted">Nothing here yet. Resources you add, and sources Aasaan finds, appear in this view.</p>`);
+}
+
+function chatChip(c) {
+  const ws = document.getElementById("ws");
+  if (matchMedia("(max-width: 860px)").matches) document.querySelector('#tabbar [data-tab="course"]').click();
+  if (c.kind === "chapter") { document.getElementById("vt-course").click(); loadChapter(Number(c.id), false, false); }
+  else if (c.kind === "resource") {
+    document.getElementById("vt-res").click();
+    const item = document.querySelector(`[data-rid="${c.id}"]`);
+    if (item) { item.scrollIntoView({ block: "center", behavior: "smooth" }); item.classList.add("flash"); setTimeout(() => item.classList.remove("flash"), 2200); }
+  } else if (c.kind === "link" && c.url) window.open(c.url, "_blank", "noopener");
 }
 
 function connect(nid) {
@@ -302,7 +329,7 @@ function connect(nid) {
 
 function onSnapshot(nb) {
   const cur = S.chapter, hadChapters = !!(S.nb && S.nb.chapters.length);
-  S.nb = nb; renderHead(); renderSide(); renderResources();
+  S.nb = nb; renderHead(); renderSide(); renderResources(); S.chat?.onSnapshot(nb);
   if (!S.chapter || !hadChapters || nb.status === "failed") settleCourse();
   const now = cur && nb.chapters.find((c) => c.id === cur.id);
   if (!now) return;
@@ -324,7 +351,7 @@ function renderHead() {
   const cv = document.getElementById("cover");   // generated cover, inlined so it follows the theme tokens
   if (cv && cv.dataset.t !== nb.title) {
     cv.dataset.t = nb.title;
-    fetch(`/api/notebooks/${nb.id}/cover.svg`).then((r) => r.ok ? r.text() : "").then((t) => { if (cv.dataset.t === nb.title) cv.innerHTML = t; }).catch(() => {});
+    fetch(`/api/notebooks/${nb.id}/cover.svg?t=${encodeURIComponent(nb.title)}`).then((r) => r.ok ? r.text() : "").then((t) => { if (cv.dataset.t === nb.title) cv.innerHTML = t; }).catch(() => {});
   }
   document.getElementById("nbdesc").innerHTML = esc(nb.description || "") + ((nb.sources || []).length
     ? `<span class="srcs">Based on: ${nb.sources.map((x) => x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc((x.title || x.url).slice(0, 40))}</a>` : `<span>${esc(x.title.slice(0, 40))}</span>`).join(" · ")}</span>` : "")
@@ -408,8 +435,8 @@ function renderChapter() {
       <ul class="claims" id="claims" hidden>${issues.map((i) => `<li>${esc(i.claim)} <span class="muted">(${esc(i.source_status)})</span></li>`).join("")}</ul></div>` : "",
                    !ch.grounded ? `<p class="flag">Written from general knowledge; no source material was supplied.</p>` : "",
                    ...(ch.curator_notes || []).map((n) => `<p class="flag">${esc(n)}</p>`)].join("");
-  main.innerHTML = head + notices + ch.blocks.map(blockHtml).join("") + doubtHtml() + nav;
-  wireNav(main); wireBlocks(main); wireClaims(main);
+  main.innerHTML = head + notices + ch.blocks.map(blockWithAsk).join("") + doubtHtml() + nav;
+  wireNav(main); wireBlocks(main); wireClaims(main); wireAsk(main);
 }
 
 function skeleton(ch) {
@@ -417,6 +444,18 @@ function skeleton(ch) {
     <button class="btn" id="retry-ch">Try again</button></div>`;
   return `<div class="skel" role="status"><p class="muted"><span class="spin"></span>${esc(({ queued: "Queued", drafting: "Writing notes", checking: "Checking facts" })[ch.status] || "Queued")}. This chapter fills in on its own; you can read others meanwhile.</p>
     <div class="bar-s w80"></div><div class="bar-s"></div><div class="bar-s w60"></div><div class="bar-s w90"></div></div>`;
+}
+
+const ASKABLE = { notes: "Notes", slides: "Slides", summary: "Summary", visual: "Diagram", video: "Video", image: "Image", link: "Link" };
+function blockWithAsk(b) {
+  let h = blockHtml(b);
+  if (!ASKABLE[b.type] || !h) return h;
+  const label = ASKABLE[b.type] + (b.type === "visual" || b.type === "video" ? ` · ${(b.content.caption || b.content.title || "").slice(0, 30)}` : "");
+  h = h.replace("<section", `<section data-bid="${b.id}"`);
+  return h.replace(/<\/section>\s*$/, `<button class="askbtn" type="button" data-ask="${b.id}" data-label="${esc(label)}" aria-label="Ask about this ${esc(ASKABLE[b.type].toLowerCase())}">Ask about this</button></section>`);
+}
+function wireAsk(main) {
+  main.querySelectorAll(".askbtn").forEach((b) => b.onclick = () => S.chat?.ask({ id: Number(b.dataset.ask), label: b.dataset.label }));
 }
 
 function blockHtml(b) {

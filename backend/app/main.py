@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -26,7 +27,7 @@ from .engine import Engine, UserError
 from .resilience import mask_key
 from .router import ModelRouter
 from .tools import ToolRunner
-from . import visuals
+from . import visuals, web
 from .visuals.cover import cover_svg
 from .worker import Worker
 
@@ -229,13 +230,14 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
         engine._nb(nid)
 
         async def gen():
-            last, idle = None, 0
+            last, idle, seq = None, 0, 0
+            yield "retry: 2000\n\n"   # the browser reconnects by itself and gets the current full snapshot (state, not a delta)
             while not await request.is_disconnected():
                 view = await run_in_threadpool(engine.notebook_view, nid)
                 payload = json.dumps(view)
                 if payload != last:
-                    last, idle = payload, 0
-                    yield f"data: {payload}\n\n"
+                    last, idle, seq = payload, 0, seq + 1
+                    yield f"id: {seq}\ndata: {payload}\n\n"
                 else:
                     idle += 1
                     if idle % 15 == 0:
@@ -244,6 +246,70 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ---- chat thread
+    @app.get("/api/notebooks/{nid}/messages")
+    def messages(nid: str, after: int = 0):
+        return {"messages": engine.chat_history(nid, after)}
+
+    @app.post("/api/notebooks/{nid}/resources")
+    async def add_resources(nid: str, files: list[UploadFile] = File(default=[]), urls: str = Form("")):
+        data = [(f.filename or "file", f.content_type or "", await f.read()) for f in files if f is not None and f.filename]
+        link_list = [u for u in urls.split() if u.startswith(("http://", "https://"))]
+        if not (data or link_list):
+            raise HTTPException(400, "Add a file or a link.")
+        try:
+            return {"resources": await run_in_threadpool(engine.add_resources, nid, data, link_list)}
+        except UserError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/notebooks/{nid}/chat")
+    async def chat(nid: str, learner_id: str = Form(...), text: str = Form(""), chapter_id: Optional[int] = Form(None), block_ids: str = Form(""),
+                   files: list[UploadFile] = File(default=[])):
+        """One chat turn as a server-sent stream: `user` (stored), `status`, `delta` pieces of the validated answer, `done` (stored, with chips).
+        The answer is validated against the sources BEFORE it is shown, so it streams from the checked text, not from raw model tokens."""
+        engine._nb(nid)
+        text = (text or "").strip()[:4000]
+        data = [(f.filename or "file", f.content_type or "", await f.read()) for f in files if f is not None and f.filename]
+        urls = web.extract_urls(text)
+        question = web.URL_RE.sub("", text).strip()
+        if not (text or data):
+            raise HTTPException(400, "Type a message or attach a file.")
+        try:
+            await run_in_threadpool(engine.validate_resources, nid, data, urls)
+        except UserError as e:
+            raise HTTPException(400, str(e))
+        blocks = [int(x) for x in block_ids.split(",") if x.strip().isdigit()][:3]
+
+        def ev(name: str, payload: dict) -> str:
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+
+        async def gen():
+            attach = [{"name": n, "size": len(d), "kind": "pdf" if n.lower().endswith(".pdf") else "image" if c.startswith("image/") else "text"} for n, c, d in data]
+            mid = store.add_message(nid, "user", text, kind="chat", attachments=attach + [{"name": u, "kind": "url"} for u in urls])
+            yield ev("user", {"id": mid, "content": text, "attachments": attach})
+            try:
+                if data or urls:
+                    await run_in_threadpool(engine.add_resources, nid, data, urls)
+                if not question:
+                    yield ev("done", {"id": None, "refs": []})
+                    return
+                yield ev("status", {"text": "Looking through your course…"})
+                res = await run_in_threadpool(engine.chat_reply, nid, learner_id, question, chapter_id, blocks)
+            except Exception as e:  # noqa: BLE001  the student gets a calm message, the detail stays in the log
+                log_.warning("[aasaan] chat failed: %s", e)
+                msg = "I couldn't answer that just now. Please try again in a moment."
+                aid = store.add_message(nid, "assistant", msg, kind="chat")
+                yield ev("error", {"id": aid, "content": msg})
+                return
+            aid = store.add_message(nid, "assistant", res["answer"], kind="chat", refs=res["refs"])
+            words = re.findall(r"\S+\s*", res["answer"])
+            for i in range(0, len(words), 3):
+                yield ev("delta", {"text": "".join(words[i:i + 3])})
+                await asyncio.sleep(0.03)
+            yield ev("done", {"id": aid, "refs": res["refs"]})
+
+        return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/notebooks/{nid}/companion")
     def companion_open(nid: str, learner_id: str):

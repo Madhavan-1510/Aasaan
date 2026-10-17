@@ -395,10 +395,11 @@ def render_timeline(spec: TimelineSpec) -> Rendered:
         x, up = left + i * step, i % 2 == 0
         lines = wrap(e.label, 14, 3)
         body.append(f'<circle class="vz-node" cx="{x:.1f}" cy="{mid}" r="7"/>')
-        body.append(f'<path class="vz-edge" d="M{x:.1f} {mid + (-7 if up else 7)} L{x:.1f} {mid + (-34 if up else 34)}"/>')
-        cy = mid - 62 if up else mid + 62
+        tip = mid - 30 if up else mid + 30
+        body.append(f'<path class="vz-edge" d="M{x:.1f} {mid + (-7 if up else 7)} L{x:.1f} {tip}"/>')
+        cy = mid - 72 if up else mid + 80                      # label block, then the date between it and the connector
         body.append(text_block(x, cy, lines))
-        body.append(f'<text x="{x:.1f}" y="{mid + (-42 if up else 52) + (0 if up else 0)}" text-anchor="middle" class="vz-small">{esc(e.when)}</text>')
+        body.append(f'<text x="{x:.1f}" y="{mid - 38 if up else mid + 46}" text-anchor="middle" class="vz-small">{esc(e.when)}</text>')
         boxes.append((x - 55, cy - len(lines) * LINE_H / 2, 110, len(lines) * LINE_H, e.label))
         labels += [e.label, str(e.when)]
     return wrap_svg(width, height, "".join(body), spec.title, spec.alt_text, boxes, labels)

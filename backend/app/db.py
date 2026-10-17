@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS jobs(
   attempts INTEGER DEFAULT 0, last_error TEXT, scheduled_at REAL, updated_at REAL);
 CREATE INDEX IF NOT EXISTS ix_jobs_state ON jobs(state, scheduled_at);
 CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id TEXT, role TEXT, kind TEXT DEFAULT 'chat', content TEXT,
+  attachments TEXT, refs TEXT, key TEXT, created_at REAL);
+CREATE INDEX IF NOT EXISTS ix_messages_nb ON messages(notebook_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_key ON messages(notebook_id, key) WHERE key IS NOT NULL;
 """
 
 
@@ -79,6 +84,9 @@ class Store:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(sources)")}
         if "meta" not in have:
             self.conn.execute("ALTER TABLE sources ADD COLUMN meta TEXT")
+        jobs = {r["name"] for r in self.conn.execute("PRAGMA table_info(jobs)")}
+        if "payload" not in jobs:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN payload TEXT")
 
     # -- low level (autocommit; transaction() opens an explicit BEGIN) -------
     def _run(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -141,7 +149,7 @@ class Store:
             ids = [r["id"] for r in self.conn.execute("SELECT id FROM chapters WHERE notebook_id=?", (nid,))]
             for cid in ids:
                 self.conn.execute("DELETE FROM blocks WHERE chapter_id=?", (cid,))
-            for t in ("chapters", "sources", "jobs", "quiz_attempts"):
+            for t in ("chapters", "sources", "jobs", "quiz_attempts", "messages"):
                 self.conn.execute(f"DELETE FROM {t} WHERE notebook_id=?", (nid,))
             self.conn.execute("DELETE FROM notebooks WHERE id=?", (nid,))
 
@@ -330,11 +338,34 @@ class Store:
         return [dict(r) for r in self._all("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))]
 
     # ===================================================================== jobs
-    def add_job(self, nid: str, chapter_id: Optional[int], kind: str) -> int:
+    def add_job(self, nid: str, chapter_id: Optional[int], kind: str, payload: Optional[dict] = None) -> int:
         now = time.time()
-        cur = self._run("INSERT INTO jobs(notebook_id,chapter_id,kind,state,attempts,scheduled_at,updated_at) VALUES(?,?,?,?,0,?,?)",
-                        (nid, chapter_id, kind, "queued", now, now))
+        cur = self._run("INSERT INTO jobs(notebook_id,chapter_id,kind,state,attempts,scheduled_at,updated_at,payload) VALUES(?,?,?,?,0,?,?,?)",
+                        (nid, chapter_id, kind, "queued", now, now, _j(payload) if payload is not None else None))
         return int(cur.lastrowid)
+
+    # ================================================================ messages
+    def add_message(self, nid: str, role: str, content: str, kind: str = "chat", attachments: Optional[list] = None,
+                    refs: Optional[list] = None, key: Optional[str] = None) -> Optional[int]:
+        """Append to the notebook's chat thread. A `key` makes it idempotent (a retried job never narrates twice); returns None for a duplicate."""
+        try:
+            cur = self._run("INSERT INTO messages(notebook_id,role,kind,content,attachments,refs,key,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                            (nid, role, kind, content, _j(attachments or []), _j(refs or []), key, time.time()))
+        except sqlite3.IntegrityError:
+            return None
+        return int(cur.lastrowid)
+
+    def messages(self, nid: str, after: int = 0, limit: int = 200) -> list[dict]:
+        out = []
+        for r in self._all("SELECT * FROM messages WHERE notebook_id=? AND id>? ORDER BY id LIMIT ?", (nid, after, limit)):
+            d = dict(r)
+            d["attachments"], d["refs"] = _l(d["attachments"], []), _l(d["refs"], [])
+            out.append(d)
+        return out
+
+    def last_message_id(self, nid: str) -> int:
+        r = self._one("SELECT COALESCE(MAX(id),0) m FROM messages WHERE notebook_id=?", (nid,))
+        return int(r["m"])
 
     def pending_jobs(self) -> list[dict]:
         """Queued jobs that are due, most urgent first: chapter priority, then notebook order."""

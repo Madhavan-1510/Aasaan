@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -174,6 +175,8 @@ class Engine:
                 self._run_notebook_job(job["notebook_id"])
             elif job["kind"] == "chapter":
                 self.build_chapter(job["chapter_id"])
+            elif job["kind"] == "resource":
+                self.process_resource(job["notebook_id"], json.loads(job["payload"] or "{}").get("source_id", ""))
             self.store.set_job(jid, "done")
         except Exception as e:  # any failure is recorded, never swallowed
             msg = f"{type(e).__name__}: {e}"[:500]
@@ -184,6 +187,13 @@ class Engine:
                     self.store.set_chapter_status(job["chapter_id"], "queued", msg)
             else:
                 self.store.set_job(jid, "failed", msg, attempts=attempts)
+                if job["kind"] == "resource":
+                    sid = json.loads(job["payload"] or "{}").get("source_id", "")
+                    self.store.set_source_meta(sid, {"status": "unreadable", "issues": [{"kind": "failed", "pages": [], "checked_with_vision": False,
+                                                                                         "reason": friendly_error(e, notebook=False)}]})
+                    self.say(job["notebook_id"], "I couldn't read that file. You can try adding it again.", key=f"readfail:{sid}")
+                if job["notebook_id"] and job["kind"] == "notebook":
+                    self.say(job["notebook_id"], friendly_error(e), key=f"failed:{attempts}")
                 if job["chapter_id"]:
                     self.store.set_chapter_status(job["chapter_id"], "failed", friendly_error(e, notebook=False))
                 if job["kind"] == "notebook":
@@ -226,7 +236,12 @@ class Engine:
         prof = self.profile(nb["learner_id"], nb)
         warnings: list[str] = []
         topics: list[dict] = []
-        for src in self.store.sources(nid)[:MAX_SOURCES]:
+        srcs = self.store.sources(nid)[:MAX_SOURCES]
+        if not srcs:
+            self.say(nid, "Planning your course from your goal.", key="planning")
+        for src in srcs:
+            label = {"pdf": "your PDF", "url": "your link", "text": "your notes", "image": "your photo"}.get(src["kind"], "your file")
+            self.say(nid, f"Reading {label}.", key=f"reading:{src['id']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
             try:
                 got = self._read_source(src, nb, warnings)
             except AllFailed:
@@ -236,6 +251,8 @@ class Engine:
                 continue
             res: IntakeOut = got
             self.store.update_source_chunks(src["id"], [c.model_dump() for c in res.chunks])
+            fresh = next((s for s in self.store.sources(nid) if s["id"] == src["id"]), src)
+            self._say_source_read(nid, src, fresh.get("meta") or {"status": "ready"}, len(res.chunks))
             for t in res.topics:
                 topics.append({**t.model_dump(), "source_id": src["id"]})
             warnings += [w for w in res.warnings if not re.match(r"page \d+ unreadable or empty$", w)]   # shown once per file in Resources instead
@@ -258,6 +275,7 @@ class Engine:
             self.store.set_chapter_prereqs(key_to_id[c.key], [key_to_id[p] for p in c.prereqs])
         self.store.update_notebook(nid, title=out.title[:80], description=out.description, level=out.level,
                                    goal=nb["goal"] or out.title)
+        self.say(nid, f"The outline is ready: {len(out.chapters)} chapters. I'm writing chapter 1 first.", key="outline")
 
     def _read_source(self, src: dict, nb: dict, warnings: list[str]) -> Optional[IntakeOut]:
         """Turn one source into chunks and topics. Text/PDF/URL chunking is code; photos go to the vision model."""
@@ -362,6 +380,187 @@ class Engine:
             log.info("[aasaan] %s: %d page(s) with no text (%s): %s", title, len(i["pages"]), i["kind"], i["reason"])
         return pages, {"status": status, "pages_total": total, "pages_read": read, "recovered_with_vision": sorted(recovered), "issues": issues}
 
+    # =============================================================== chat thread
+    def say(self, nid: str, text: str, key: Optional[str] = None, refs: Optional[list] = None, kind: str = "system") -> Optional[int]:
+        """Progress narration in the chat: fixed wording written by code from real state, never by a model, so it cannot contradict the course.
+        A key makes it idempotent (a retried job does not repeat itself)."""
+        try:
+            return self.store.add_message(nid, "assistant", text, kind=kind, refs=refs, key=key)
+        except Exception as e:  # noqa: BLE001  narration must never break a build
+            log.warning("[aasaan] could not post chat message: %s", e)
+            return None
+
+    @staticmethod
+    def _chapter_ref(ch: dict) -> dict:
+        return {"kind": "chapter", "id": ch["id"], "label": ch["title"][:60]}
+
+    def _announce_chapter(self, ch: dict, verified: bool) -> None:
+        pos = ch["position"]
+        text = f"Chapter {pos} is ready: {ch['title']}." + (" You can start reading while I write the rest." if pos == 1 else "")
+        self.say(ch["notebook_id"], text, key=f"ready:{ch['id']}", refs=[self._chapter_ref(ch)])
+        if not verified:
+            self.say(ch["notebook_id"], f"A few claims in chapter {pos} couldn't be fully verified. The chapter page lists them, and you can re-check.",
+                     key=f"unverified:{ch['id']}", refs=[self._chapter_ref(ch)])
+
+    def _say_source_read(self, nid: str, src: dict, meta: dict, n_chunks: int) -> None:
+        label = {"pdf": "your PDF", "url": "your link", "text": "your notes", "image": "your photo"}.get(src["kind"], "your file")
+        status = (meta or {}).get("status", "ready")
+        if status == "unreadable":
+            self.say(nid, f"I couldn't read {label} \"{src['title'][:50]}\". A clearer copy would help.", key=f"read:{src['id']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
+            return
+        text = f"Finished reading {label} \"{src['title'][:50]}\"" + (f" ({meta['pages_read']} of {meta['pages_total']} pages)" if (meta or {}).get("pages_total") else "") + "."
+        self.say(nid, text, key=f"read:{src['id']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
+        for i in (meta or {}).get("issues", []):
+            n = len(i["pages"])
+            msg = {"drawing_only": f"{n} page{'s' if n != 1 else ''} of it only had lines or shapes and no text.", "blank": f"{n} page{'s' if n != 1 else ''} of it were blank.",
+                   "failed": f"{n} page{'s' if n != 1 else ''} of it couldn't be read.", "over_limit": f"I only read the first pages; {n} more were not read."}.get(i["kind"])
+            if msg:
+                self.say(nid, msg + " Details are under Resources.", key=f"issue:{src['id']}:{i['kind']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
+
+    # ---- messages and answers
+    def chat_history(self, nid: str, after: int = 0) -> list[dict]:
+        self._nb(nid)
+        return self.store.messages(nid, after)
+
+    @staticmethod
+    def _block_text(b: dict) -> str:
+        c = b["content"]
+        if b["type"] == "notes":
+            return c.get("markdown", "")
+        if b["type"] == "slides":
+            return " ".join(f"{s.get('title', '')}: {'; '.join(s.get('points', []))}" for s in c.get("cards", []))
+        if b["type"] == "summary":
+            return c.get("text", "") + " " + " ".join(c.get("key_points", []))
+        if b["type"] == "visual":
+            return f"Diagram: {c.get('caption', '')}. {c.get('alt_text', '')}"
+        if b["type"] in ("video", "image", "link"):
+            return f"{b['type']}: {c.get('title', '')}"
+        return ""
+
+    def _ref_chips(self, nid: str, refs: list[str], ch: Optional[dict]) -> list[dict]:
+        """Chips under an answer: the chapter it drew on, and the student's resources/pages it cited. Clicking one opens that place."""
+        chips, titles = [], {s["id"]: s["title"] for s in self.store.sources(nid)}
+        if ch:
+            chips.append(self._chapter_ref(ch))
+        page_chunks = {c["chunk_id"]: c for c in ((ch or {}).get("meta") or {}).get("page_chunks", [])}
+        for r in refs:
+            m = re.match(r"^(s[0-9a-f]+)-p(\d+)", r)
+            if m and m.group(1) in titles:
+                chips.append({"kind": "resource", "id": m.group(1), "label": f"{titles[m.group(1)][:36]} · p{m.group(2)}", "page": int(m.group(2))})
+            elif r in page_chunks:
+                chips.append({"kind": "link", "url": page_chunks[r].get("url", ""), "label": (page_chunks[r].get("title") or "web page")[:40]})
+        seen, out = set(), []
+        for c in chips:
+            k = (c["kind"], c.get("id") or c.get("url"), c.get("page"))
+            if k not in seen:
+                seen.add(k)
+                out.append(c)
+        return out[:5]
+
+    def chat_reply(self, nid: str, learner_id: str, text: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None) -> dict:
+        """Answer a question about the notebook from its own sources and the chapter in focus. Returns {answer, refs}."""
+        nb = self._nb(nid)
+        prof = self.profile(learner_id, nb)
+        chs = [c for c in self.store.chapters(nid)]
+        words = set(re.findall(r"\w{3,}", text.lower()))
+        ch = next((c for c in chs if c["id"] == chapter_id), None)
+        if ch is None and chs:   # no chapter in focus: the one whose title and summary best match the question
+            score = lambda c: len(words & set(re.findall(r"\w{3,}", f"{c['title']} {c['summary']}".lower())))  # noqa: E731
+            best = max((c for c in chs if c["status"] == "ready"), key=score, default=None)
+            ch = best if best is not None and score(best) > 0 else None
+        pool = self._all_chunks(nid) + (((ch or {}).get("meta") or {}).get("page_chunks") or [])
+        pool.sort(key=lambda c: -len(words & set(re.findall(r"\w{3,}", c["text"].lower()))))
+        notes = ""
+        if ch and ch["status"] == "ready":
+            notes = next((b["content"].get("markdown", "") for b in self.store.blocks(ch["id"]) if b["type"] == "notes"), "")
+        ctx_parts = []
+        for bid in (block_ids or [])[:3]:
+            b = self.store.get_block(bid)
+            if b:
+                ctx_parts.append(self._block_text(b)[:1500])
+        if ctx_parts:
+            notes = "The student is asking about this part of the course:\n" + "\n".join(ctx_parts) + "\n\n" + notes
+        with self._scope(nid):
+            res = doubt.run(self.router, text, pool[:6], prof, notes)
+        return {"answer": res.value.answer, "refs": self._ref_chips(nid, res.value.source_refs, ch)}
+
+    # ============================================================ added resources
+    MAX_RESOURCES = 20
+    TEXT_EXT = (".txt", ".md", ".markdown")
+
+    def validate_resources(self, nid: str, files: list[tuple[str, str, bytes]], urls: list[str]) -> None:
+        self._nb(nid)
+        if len(self.store.sources(nid)) + len(files) + len(urls) > self.MAX_RESOURCES:
+            raise UserError(f"A notebook can hold up to {self.MAX_RESOURCES} resources.")
+        for name, ctype, data in files:
+            low = name.lower()
+            if len(data) > MAX_FILE_BYTES:
+                raise UserError(f"{name} is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
+            if not (ctype == "application/pdf" or low.endswith(".pdf") or ctype.startswith("image/") or ctype.startswith("text/") or low.endswith(self.TEXT_EXT)):
+                raise UserError(f"{name}: only PDFs, photos and text files can be added.")
+        for u in urls:
+            ok, why = web.is_safe_url(u)
+            if not ok:
+                raise UserError(f"I can't open that link: {why}")
+
+    def add_resources(self, nid: str, files: list[tuple[str, str, bytes]], urls: list[str]) -> list[dict]:
+        """Chat or Resources view: new files and links become sources and are read in the background. The course is NOT changed here."""
+        self.validate_resources(nid, files, urls)
+        out = []
+        folder = self.upload_dir / nid
+        for name, ctype, data in files:
+            if len(data) > MAX_FILE_BYTES:
+                raise UserError(f"{name} is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
+            low = name.lower()
+            is_pdf = ctype == "application/pdf" or low.endswith(".pdf")
+            is_text = ctype.startswith("text/") or low.endswith(self.TEXT_EXT)
+            if not (is_pdf or ctype.startswith("image/") or is_text):
+                raise UserError(f"{name}: only PDFs, photos and text files can be added.")
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / re.sub(r"[^\w.\-]", "_", name)[:80]
+            path.write_bytes(data)
+            if is_text and not is_pdf:
+                sid = self.store.add_source(nid, "text", str(path), name, data.decode("utf-8", "replace")[:200_000], [])
+                kind = "text"
+            else:
+                kind = "pdf" if is_pdf else "image"
+                sid = self.store.add_source(nid, kind, str(path), name, "", [])
+            out.append(self._queue_resource(nid, sid, kind, name, len(data)))
+        for u in urls:
+            ok, why = web.is_safe_url(u)
+            if not ok:
+                raise UserError(f"I can't open that link: {why}")
+            sid = self.store.add_source(nid, "url", u, u, "", [])
+            out.append(self._queue_resource(nid, sid, "url", u, 0))
+        return out
+
+    def _queue_resource(self, nid: str, sid: str, kind: str, name: str, size: int) -> dict:
+        self.store.set_source_meta(sid, {"status": "reading", "size": size})
+        self.store.add_job(nid, None, "resource", {"source_id": sid})
+        self.say(nid, f"Got \"{name[:50]}\". Reading it now.", key=f"got:{sid}", refs=[{"kind": "resource", "id": sid, "label": name[:50]}])
+        return {"id": sid, "name": name, "kind": kind, "status": "reading", "size": size}
+
+    def process_resource(self, nid: str, sid: str) -> None:
+        with self._scope(nid):
+            nb = self._nb(nid)
+            src = next((s for s in self.store.sources(nid) if s["id"] == sid), None)
+            if not src:
+                return
+            warnings: list[str] = []
+            got = self._read_source(src, nb, warnings)
+            meta = (next((s for s in self.store.sources(nid) if s["id"] == sid), src).get("meta")) or {}
+            if got is None:
+                meta = {**meta, "status": "unreadable", "issues": meta.get("issues") or [{"kind": "failed", "pages": [], "checked_with_vision": False,
+                                                                                         "reason": (warnings[0] if warnings else "It could not be read.")[:200]}]}
+                self.store.set_source_meta(sid, meta)
+                self._say_source_read(nid, src, meta, 0)
+                return
+            self.store.update_source_chunks(sid, [c.model_dump() for c in got.chunks])
+            if not meta.get("status") or meta.get("status") == "reading":
+                meta = {**meta, "status": "ready", "pages_total": meta.get("pages_total"), "issues": meta.get("issues", [])}
+            self.store.set_source_meta(sid, meta)
+            self._say_source_read(nid, src, meta, len(got.chunks))
+
     # ============================================================== chapters
     def build_chapter(self, cid: int) -> None:
         with self._scope(self._chapter(cid)["notebook_id"]):
@@ -441,6 +640,7 @@ class Engine:
                 "page_chunks": page_chunks, "curator_notes": res.notes,
                 "review_issues": [] if verified else self._claim_rows(open_points, chunks, allowed_extra)}
         self.store.replace_blocks(cid, blocks, "ready", meta)
+        self._announce_chapter(ch, verified)
         if verified:
             self.store.cache_set(teacher.content_cache_key(ch, prof.language), content.model_dump())
             self.store.cache_set(quizzer.quiz_cache_key(ch, prof.language), quiz.model_dump())
@@ -461,6 +661,8 @@ class Engine:
             return
         if status != nb["status"] or nb.get("error"):
             self.store.update_notebook(nid, status=status, error="")
+        if status == "complete":
+            self.say(nid, f"Your whole notebook is ready: {len(chs)} chapters.", key="complete")
 
     def prioritize(self, cid: int) -> dict:
         """The student opened a chapter that is not ready: jump the queue."""
@@ -576,7 +778,7 @@ class Engine:
                 "preparing": {"ready": sum(1 for c in chs if c["status"] == "ready"), "total": len(chs),
                               "pct": round(100 * sum(1 for c in chs if c["status"] == "ready") / len(chs)) if chs else 0,
                               "complete": bool(chs) and all(c["status"] == "ready" for c in chs)},
-                "progress": {"done": done, "total": len(chs)}, "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
+                "progress": {"done": done, "total": len(chs)}, "message_seq": self.store.last_message_id(nid), "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
                 "source_issues": [{"source_id": s["id"], "title": s["title"], "status": s["meta"].get("status", "ready"), "pages_total": s["meta"].get("pages_total"),
                                    "pages_read": s["meta"].get("pages_read"), "issues": s["meta"].get("issues", [])}
                                   for s in self.store.sources(nid) if (s["meta"] or {}).get("issues")],
