@@ -86,13 +86,13 @@ def render_page_png(data: bytes, page: int, scale: float = 1.6) -> Optional[byte
     """The page as a PNG for a vision model (pypdfium2). None when no renderer is installed."""
     try:
         import pypdfium2 as pdfium
-    except ImportError:
+        pdf = pdfium.PdfDocument(data)
+        img = pdf[page - 1].render(scale=scale).to_pil()
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001  no renderer (or Pillow) installed, or a damaged page: callers report "couldn't read", never crash
         return None
-    pdf = pdfium.PdfDocument(data)
-    img = pdf[page - 1].render(scale=scale).to_pil()
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, "PNG")
-    return buf.getvalue()
 
 
 def ocr_page(router: ModelRouter, png: bytes, language: str, label: str) -> dict:

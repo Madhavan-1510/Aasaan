@@ -84,3 +84,10 @@ def test_pages_beyond_the_read_limit_are_reported(engine, worker, store, monkeyp
     worker.run_until_idle()
     issue = engine.notebook_view(nid)["source_issues"][0]
     assert issue["pages_total"] == 75 and issue["issues"][-1]["kind"] == "over_limit" and issue["issues"][-1]["pages"][0] == 3
+
+
+def test_a_missing_renderer_never_crashes(monkeypatch):
+    import builtins
+    real = builtins.__import__
+    monkeypatch.setattr(builtins, "__import__", lambda n, *a, **k: (_ for _ in ()).throw(ImportError("no pypdfium2")) if n == "pypdfium2" else real(n, *a, **k))
+    assert intake.render_page_png(b"%PDF-1.4", 1) is None

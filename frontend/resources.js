@@ -51,7 +51,7 @@ export function createResources(ctx) {
       : st.adding === "text" ? `<form class="addform" data-form="text"><textarea name="t" rows="5" placeholder="Paste notes or text here" aria-label="Text to add" required></textarea><div><button class="btn" type="submit">Add text</button> <button class="btn ghost" type="button" data-act="cancel">Cancel</button></div></form>` : "";
     return `<div class="dropzone" id="dropzone"><div><strong>Add a resource</strong><span class="muted"> Drop files here: PDFs, photos or text files.</span></div>
       <div class="dz-actions"><button class="btn ghost" type="button" data-act="addfiles">${ICON.clip} Add files</button><button class="btn ghost" type="button" data-act="addlink">Add a link</button><button class="btn ghost" type="button" data-act="addtext">Paste text</button></div>${form}
-      <input type="file" id="resfile" multiple accept="image/*,application/pdf,.txt,.md,text/plain" hidden></div>`;
+      <input type="file" id="resfile" aria-label="Choose files to add" multiple accept="image/*,application/pdf,.txt,.md,text/plain" hidden></div>`;
   }
 
   function render() {

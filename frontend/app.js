@@ -201,7 +201,7 @@ async function workspace(nid, cid) {
           <div class="toolbar"><button class="iconbtn" id="chatattach" type="button" aria-label="Attach files">${ICON.clip}</button>
             <button class="iconbtn" id="chatmic" type="button" aria-label="Speak your message">${ICON.mic}</button><span class="spacer"></span>
             <button class="send" id="chatsend" type="button" aria-label="Send" disabled>${ICON.up}</button></div></div>
-        <input id="chatfile" type="file" accept="image/*,application/pdf,.txt,.md,text/plain" multiple hidden>
+        <input id="chatfile" type="file" aria-label="Choose files to send" accept="image/*,application/pdf,.txt,.md,text/plain" multiple hidden>
       </div>
     </aside>
     <button class="chatfab" id="chatfab" aria-label="Open chat" aria-keyshortcuts="Control+." title="Open chat (Ctrl+.)"><span>${ICON.logo}</span><i class="dot" id="chatdot" hidden></i></button>

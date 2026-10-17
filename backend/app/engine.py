@@ -406,7 +406,8 @@ class Engine:
         label = {"pdf": "your PDF", "url": "your link", "text": "your notes", "image": "your photo"}.get(src["kind"], "your file")
         status = (meta or {}).get("status", "ready")
         if status == "unreadable":
-            self.say(nid, f"I couldn't read {label} \"{src['title'][:50]}\". A clearer copy would help.", key=f"read:{src['id']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
+            hint = "The site may need a login or block automated readers. You can paste the text instead." if src["kind"] == "url" else "A clearer copy would help."
+            self.say(nid, f"I couldn't read {label} \"{src['title'][:50]}\". {hint}", key=f"read:{src['id']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])
             return
         text = f"Finished reading {label} \"{src['title'][:50]}\"" + (f" ({meta['pages_read']} of {meta['pages_total']} pages)" if (meta or {}).get("pages_total") else "") + "."
         self.say(nid, text, key=f"read:{src['id']}", refs=[{"kind": "resource", "id": src["id"], "label": src["title"][:50]}])

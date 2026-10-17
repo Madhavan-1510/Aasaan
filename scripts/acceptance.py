@@ -275,6 +275,112 @@ def main() -> int:
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", f"backend/tests/{node}"], cwd=ROOT, capture_output=True, text=True)
         rec(name, "PASS" if r.returncode == 0 else "FAIL", "offline test: " + node.split("::")[-1])
 
+    # ---- Milestone 3 (workspace, chat, resources, proposals, light mode). API-checkable items run live against this server;
+    # UI-only items (layout, animation, no-flash) were checked in the browser and are marked SKIP here with the reason.
+    def events_of(text):
+        out = []
+        for blk in text.strip().split("\n\n"):
+            ln = blk.split("\n")
+            if len(ln) >= 2 and ln[0].startswith("event: "):
+                try:
+                    out.append((ln[0][7:], json.loads(ln[1][6:])))
+                except ValueError:
+                    pass
+        return out
+
+    try:
+        t0 = time.time()
+        nid3 = cl.create("I want to learn binary search")
+        post_s = time.time() - t0
+        rec("M3-1 submit returns the notebook id at once (the workspace opens on it)", "PASS" if post_s < 3.0 else "FAIL", f"POST /api/notebooks took {post_s:.2f}s (about 10 ms when the server is idle; slower while it is busy generating other notebooks)")
+        rec("M3-1b workspace skeleton under ~1 s, content streams in without a loading page", "SKIP", "UI timing: measured in Chrome (861 ms to workspace with skeleton); see build-log")
+        v3, _ = cl.wait(nid3, "chapters", timeout=120)
+        v3, _ = cl.wait(nid3, "open_ready", timeout=240)
+        msgs = cl.c.get(f"/api/notebooks/{nid3}/messages").json()["messages"]
+        texts = [m["content"] for m in msgs]
+        ok = any("outline is ready" in t for t in texts) and any(t.startswith("Chapter 1 is ready") for t in texts) and all(m["kind"] == "system" for m in msgs)
+        rec("M3-2 chat narrates progress in fixed wording (outline, chapter 1)", "PASS" if ok else "FAIL", f"{len(msgs)} messages: {[t[:30] for t in texts][:4]}")
+        # message while generation continues
+        r = cl.c.post(f"/api/notebooks/{nid3}/chat", data={"learner_id": cl.learner, "text": "What is binary search?"})
+        names = [e[0] for e in events_of(r.text)]
+        rec("M3-2b a message can be sent while generation continues", "PASS" if names[:1] == ["user"] and names[-1] == "done" else "FAIL", str(names[:6]))
+    except Exception as e:
+        rec("M3-1/2 workspace + narration", "FAIL", str(e))
+        nid3 = None
+
+    if nid3:
+        try:
+            v3 = cl.view(nid3)
+            ch = v3["chapters"]
+            ok8 = (all(c["learning"] == "not_started" for c in ch) and "your_progress" in v3 and "preparing" in v3
+                   and v3["your_progress"]["done"] == 0 and v3["your_progress"]["pct"] == 0)
+            fresh = cl.c.post("/api/learners", json={}).json()["learner_id"]   # this script's own learner already has history by now (the quiz checks)
+            greet = cl.c.get(f"/api/notebooks/{nid3}/companion", params={"learner_id": fresh}).json()
+            rec("M3-8 unopened chapters say Not started; two progress measures; first-session wording", "PASS" if ok8 and "Welcome back" not in greet["message"] and greet["is_first_session"] else "FAIL",
+                f"learning={ {c['learning'] for c in ch} } progress={v3['your_progress']} preparing={v3['preparing']} greeting='{greet['message'][:50]}'")
+            res = cl.c.get(f"/api/notebooks/{nid3}/resources").json()
+            rec("M3-4 Resources lists yours and Aasaan-found sources with statuses", "PASS" if "mine" in res and "found" in res else "FAIL", f"mine={len(res['mine'])} found={len(res['found'])}")
+            n_before = len(v3["chapters"])
+            up = cl.c.post(f"/api/notebooks/{nid3}/resources", files=[("files", ("extra.pdf", make_pdf("Streaming pipelines process events as they arrive. Apache Beam unifies batch and streaming."), "application/pdf"))])
+            sid = up.json()["resources"][0]["id"]
+            t1 = time.time()
+            while time.time() - t1 < 120:
+                st_ = next((x for x in cl.c.get(f"/api/notebooks/{nid3}/resources").json()["mine"] if x["id"] == sid), {})
+                if st_.get("status") in ("ready", "partly_readable", "unreadable"):
+                    break
+                time.sleep(1)
+            n_after = len(cl.view(nid3)["chapters"])
+            rec("M3-5 a PDF added in chat/Resources is read and the course does NOT change by itself", "PASS" if st_.get("status") == "ready" and n_after == n_before else "FAIL",
+                f"status={st_.get('status')} chapters {n_before}->{n_after}")
+            r = cl.c.post(f"/api/notebooks/{nid3}/chat", data={"learner_id": cl.learner, "text": "add a chapter on Delta Lake after chapter 2"})
+            ev = events_of(r.text)
+            prop = next((p for n_, p in ev if n_ == "proposal"), None)
+            if not prop:
+                rec("M3-6 edit request -> proposal card, Apply adds a chapter, Undo removes it", "FAIL", f"no proposal: {[e[0] for e in ev]} (needs a working Editor model)")
+            else:
+                pid = prop["proposal"]["id"]
+                unchanged = len(cl.view(nid3)["chapters"]) == n_before
+                ap = cl.c.post(f"/api/notebooks/{nid3}/proposals/{pid}/apply").json()
+                added = len(cl.view(nid3)["chapters"]) == n_before + 1
+                time.sleep(0.5)
+                un = None
+                for _ in range(60):  # undo waits while the new chapter is being written
+                    u = cl.c.post(f"/api/notebooks/{nid3}/proposals/{pid}/undo")
+                    if u.status_code == 200:
+                        un = u.json()
+                        break
+                    time.sleep(3)
+                back = len(cl.view(nid3)["chapters"]) == n_before
+                rec("M3-6 edit request -> proposal card, Apply adds a chapter, Undo removes it", "PASS" if unchanged and ap["status"] == "applied" and added and un and un["status"] == "undone" and back else "FAIL",
+                    f"unchanged-before-apply={unchanged} applied={ap['status']} added={added} undone={(un or {}).get('status')} restored={back}")
+            r = cl.c.post(f"/api/notebooks/{nid3}/chat", data={"learner_id": cl.learner, "text": "What is the main idea of chapter 1?"})
+            done = [p for n_, p in events_of(r.text) if n_ == "done"]
+            rec("M3-7 a doubt is answered with source chips", "PASS" if done and done[-1].get("refs") else "FAIL", f"refs={done[-1].get('refs') if done else None}")
+        except Exception as e:
+            rec("M3 live flow", "FAIL", str(e))
+        try:
+            cl.c.delete(f"/api/notebooks/{nid3}")   # leave the server as we found it
+        except Exception:
+            pass
+
+    import subprocess
+    offline3 = [
+        ("M3-9 pages with no text: vision probe once per kind, one calm notice, no orange header line", "test_pdf_recovery.py"),
+        ("M3-6b proposals validated by code, Apply/Undo, last 10 undoable, stale refused", "test_edits.py"),
+        ("M3-intent chat intent routing with fallbacks and student-data rule", "test_edits.py::test_decision_chain_routes_and_low_confidence_asks_a_clarifying_question"),
+        ("M3-chat narration, streaming, chips, resources from chat", "test_chat.py"),
+        ("M3-4b resources view, remove with impact, re-process", "test_resources.py"),
+        ("M3-10 theme tokens, no-flash script, diagrams/covers use tokens", "test_illustrator.py::test_frontend_sets_the_theme_before_first_paint_and_defines_both_token_sets"),
+    ]
+    for name, node in offline3:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", f"backend/tests/{node}"], cwd=ROOT, capture_output=True, text=True)
+        rec(name, "PASS" if r.returncode == 0 else "FAIL", "offline tests: " + node)
+    shots = sorted(p.name for p in (ROOT / "build-log" / "screens").glob("*.jpg")) if (ROOT / "build-log" / "screens").exists() else []
+    need = {f"{n}-{t}.jpg" for n in ("home", "workspace", "resources", "chapter") for t in ("light", "dark")}
+    rec("M3-10b screenshots of Home, workspace, Resources and a chapter in both themes", "PASS" if need <= set(shots) else "FAIL", f"{len(shots)} files in build-log/screens")
+    rec("M3-3 dissolve chat, remembered after reload; M3-11 phone layout with tab bar, chat sheet, uploads", "SKIP", "UI behaviour: verified in Chrome (dissolve/reload/Ctrl+. and a 400 px viewport); no automated browser test in this repo")
+    rec("M3-10c System/Light/Dark switch without a flash on reload", "SKIP", "visual: the inline script runs before the stylesheet (tested); the absence of a flash was checked by eye")
+
     c = {s: sum(1 for _, st, _ in rows if st == s) for s in ("PASS", "FAIL", "SKIP")}
     print(f"\n{c['PASS']} passed, {c['FAIL']} failed, {c['SKIP']} skipped (mode: {mode})")
     return 1 if c["FAIL"] else 0
