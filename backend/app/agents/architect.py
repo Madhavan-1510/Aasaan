@@ -12,7 +12,7 @@ from .common import build_prompt, chunk_ids, lang_name
 
 
 def run(router: ModelRouter, goal: Optional[str], topics: list[dict], chunks: list[dict], profile: LearnerProfile,
-        notebook_title: str = "") -> RouterResult:
+        notebook_title: str = "", track: Optional[str] = None) -> RouterResult:
     known = chunk_ids(chunks)
     ctx = {"goal": goal, "notebook_title": notebook_title, "topics": topics, "chunks": chunks, "level": profile.level,
            "language": profile.language, "mistake_labels": profile.mistake_labels}
@@ -61,7 +61,7 @@ def run(router: ModelRouter, goal: Optional[str], topics: list[dict], chunks: li
            "course around it and cite chunk ids in `source_refs`. Pick a `level` (beginner/intermediate/advanced) that fits the "
            f"goal. Write titles, summaries and objectives in {lang_name(profile.language)}.")
     prompt = build_prompt(job, example, {
-        "goal": goal, "student_level": profile.level, "language": lang_name(profile.language),
+        "goal": goal, "student_level": profile.level, "language": lang_name(profile.language), "track": track,
         "mistakes_to_revisit": profile.mistake_labels[:5],
         "topics_from_material": [{"id": t["id"], "title": t["title"], "summary": t.get("summary", ""),
                                   "source_id": t.get("source_id")} for t in topics],

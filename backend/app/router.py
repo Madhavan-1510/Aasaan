@@ -365,7 +365,7 @@ class ModelRouter:
         return out
 
     def decide(self, gate: str, state: Any, questions: dict[str, dict], *, student_data: bool = False, summary: str = "",
-               min_confidence: float = 0.5) -> Optional[dict]:
+               min_confidence: float = 0.5, timeout_s: Optional[float] = None) -> Optional[dict]:
         """Ask typed questions through the `decisions` chain (Jev, Jev via OpenRouter, Mercury Decide, then Gemma): ONE batched call per
         provider. A question the provider is unsure about (low confidence) is escalated to the next provider; if nobody is sure the best
         answer is kept and flagged `"unsure": true`. Returns {question_id: answer} (each tagged `_by`) or None when no provider could answer
@@ -373,7 +373,7 @@ class ModelRouter:
         if self.mode == "mock" or not questions:
             return None
         steps = self._usable_deciders(student_data)
-        timeout = self.cfg["roles"]["decisions"].get("timeout_s", 15)
+        timeout = timeout_s or self.cfg["roles"]["decisions"].get("timeout_s", 15)
         run_id, label = str(uuid.uuid4()), summary or gate
         remaining, answers, tentative = dict(questions), {}, {}
         for i, step in enumerate(steps):

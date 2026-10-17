@@ -238,6 +238,43 @@ def main() -> int:
     except Exception as e:
         rec("8 name check", "FAIL", str(e))
 
+    # ---- Milestone 2.1 addendum. Items that need a server are checked live; items that need to break a service on purpose
+    # (chaos, disabled keys, invalid specs) are proven by the offline tests, which this script runs by name.
+    try:
+        hits = [str(p.relative_to(ROOT)) for p in list((ROOT / "backend" / "app").rglob("*.py")) + [ROOT / "config" / "models.yaml", ROOT / ".env.example"]
+                if "pexels" in p.read_text(encoding="utf-8", errors="ignore").lower()]
+        rec("A1 no Pexels anywhere (code, config, .env.example)", "PASS" if not hits else "FAIL", ", ".join(hits))
+    except Exception as e:
+        rec("A1 no Pexels", "FAIL", str(e))
+    try:
+        tl = httpx.get(a.url + "/api/health/tools", timeout=15).json()
+        need = ["illustrator_renderer", "ast_flowchart", "mermaid_check", "plot_expression", "notebook_cover", "commons", "openverse", "firecrawl"]
+        missing = [n for n in need if n not in tl["tools"]]
+        dm = tl.get("decision_models", {})
+        raw = json.dumps(tl)
+        leaked = [k for k in __import__("os").environ if k.endswith(("_API_KEY", "_SECRET")) and len(__import__("os").environ[k]) > 12 and __import__("os").environ[k] in raw]
+        ok = not missing and {"jev", "jev_or", "mercury_decide"} <= set(dm) and not leaked
+        rec("A9 /api/health/tools lists Illustrator tools, Firecrawl, Jev, Mercury, image sources; keys masked", "PASS" if ok else "FAIL",
+            f"missing {missing}; decision models {sorted(dm)}; leaked keys {leaked}")
+        hm = httpx.get(a.url + "/api/health/models", timeout=60).json()
+        rec("A9b /api/health/models answers", "PASS" if hm else "FAIL", f"mode {hm.get('mode')}")
+    except Exception as e:
+        rec("A9 health endpoints", "FAIL", str(e))
+    offline = [
+        ("A2 Python snippet -> AST flowchart, no model call", "test_illustrator.py::test_python_snippet_becomes_a_flowchart_with_no_model_call"),
+        ("A3 linked-list chapter -> validated spec drawn by code, light + dark", "test_illustrator.py::test_linked_list_chapter_gets_a_validated_spec_drawn_by_code"),
+        ("A4 invalid spec -> one repair, next tier, chapter completes", "test_illustrator.py::test_invalid_spec_gets_one_repair_then_the_next_model_and_the_chapter_still_completes"),
+        ("A5 biology chapter -> Commons SVG figure with licence + attribution", "test_illustrator.py::test_biology_chapter_gets_a_commons_svg_figure_with_licence_and_attribution"),
+        ("A6 Commons chaos -> Openverse; both off -> no figure, events say why", "test_illustrator.py::test_commons_down_falls_to_openverse_both_down_ships_without_a_figure"),
+        ("A7 Jev + Mercury disabled -> Gemma gates, escalations in events", "test_gates.py::test_with_jev_and_mercury_disabled_gemma_decides_and_events_say_so"),
+        ("A8 Firecrawl last tier, off after 401/402, capped per notebook", "test_firecrawl.py"),
+        ("A10 second notebook on the same topic reuses cached visuals", "test_illustrator.py::test_second_notebook_on_the_same_topic_reuses_cached_visuals"),
+    ]
+    import subprocess
+    for name, node in offline:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", f"backend/tests/{node}"], cwd=ROOT, capture_output=True, text=True)
+        rec(name, "PASS" if r.returncode == 0 else "FAIL", "offline test: " + node.split("::")[-1])
+
     c = {s: sum(1 for _, st, _ in rows if st == s) for s in ("PASS", "FAIL", "SKIP")}
     print(f"\n{c['PASS']} passed, {c['FAIL']} failed, {c['SKIP']} skipped (mode: {mode})")
     return 1 if c["FAIL"] else 0

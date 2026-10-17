@@ -67,6 +67,12 @@ def no_real_keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_page_gate(monkeypatch):
+    """The Engine installs the page_health gate; reset it so one test's engine never leaks into the next."""
+    monkeypatch.setattr(web, "PAGE_GATE", None)
+
+
+@pytest.fixture(autouse=True)
 def fresh_tool_runner(monkeypatch):
     """Each test gets its own ToolRunner (no shared breakers or budgets) that never really sleeps between retries."""
     from app.tools import ToolRunner

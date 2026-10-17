@@ -21,6 +21,7 @@ from .. import web
 from ..providers.typesafe import noul
 from ..router import ModelRouter
 from ..schemas import CuratorOut
+from . import gates
 from .common import build_prompt
 
 log = logging.getLogger("aasaan.curator")
@@ -147,6 +148,15 @@ def curate(router: ModelRouter, store, chapter_title: str, objectives: list[str]
     kept = gate(router, chapter_title, objectives, textual, language)
     out.links = [c for c in kept if c.kind == "link"][:MAX_LINKS]
     out.videos = [c for c in kept if c.kind == "video"][:MAX_VIDEOS]
+    if out.videos and os.environ.get("YOUTUBE_API_KEY"):   # chapter markers live in the description; one batched marker decision
+        try:
+            marks = {v.extra["video_id"]: web.video_markers(v.extra["video_id"]) for v in out.videos}
+            starts = gates.video_marker(router, chapter_title, marks)
+            for v in out.videos:
+                if v.extra["video_id"] in starts:
+                    v.extra["start"] = starts[v.extra["video_id"]]
+        except Exception as e:  # noqa: BLE001  markers are a bonus; a failure just means the video starts at 0:00
+            log.warning("[aasaan] video markers skipped: %s", e)
     lead = [wikipedia_img for wikipedia_img in (web.wikipedia_lead_image(c.url) for c in out.links) if wikipedia_img]
     lead = web.verify_all(lead)  # same code verification as every other image
     for c in lead:

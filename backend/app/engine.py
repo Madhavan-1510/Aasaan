@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import web
-from .agents import architect, companion, critic, curator, diagnoser, doubt, illustrator, intake, quizzer, rewriter, teacher
+from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
 from .db import Store
 from .tools import ToolRunner
 from .router import AllFailed, ModelRouter
@@ -71,6 +71,7 @@ class Engine:
         self.tools = tools
         if tools is not None:
             web.set_runner(tools)
+        web.set_page_gate(lambda url, title, text: gates.page_health(router, url, title, text))   # page_health after each fetch tier
         self.voice = Voice(router)
         self.upload_dir = Path(upload_dir)
         self.retry_delay_s = retry_delay_s
@@ -128,6 +129,10 @@ class Engine:
                 raise UserError(f"{name} is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
             if not (ctype == "application/pdf" or ctype.startswith("image/") or name.lower().endswith(".pdf")):
                 raise UserError(f"{name}: only photos and PDFs can be attached.")
+        if goal and not (material or urls or files):   # input_gate: only a confident "unsafe" or "not a request" stops a plain goal
+            refusal = gates.input_gate(self.router, goal)
+            if refusal:
+                raise UserError(refusal)
         title = (goal or (urls[0] if urls else None) or (files[0][0] if files else None) or "New notebook")[:60]
         nid = self.store.create_notebook(learner_id, goal, language or "en", title)
         if material:
@@ -231,7 +236,12 @@ class Engine:
         self.store.cache_set(f"nbwarn:{nid}", warnings)
         if not (nb["goal"] or topics):
             raise ValueError("I couldn't read any of your material. Please paste the text or attach a clearer file.")
-        res = architect.run(self.router, nb["goal"], topics, chunks, prof, nb["title"])
+        scope = gates.scoper(self.router, nb["goal"] or "", topics)
+        if scope:
+            self.router.note("scoper", "ok", f"scoped as {scope.get('track', '?')} / {scope.get('level', '?')}", f"decided by {scope['by']}")
+            if scope.get("level") and not nb.get("level"):
+                prof.level = scope["level"]
+        res = architect.run(self.router, nb["goal"], topics, chunks, prof, nb["title"], (scope or {}).get("track"))
         out: OutlineOut = res.value
         key_to_id: dict[str, int] = {}
         for i, c in enumerate(out.chapters, start=1):
@@ -318,6 +328,9 @@ class Engine:
             illo_future = illo_pool.submit(contextvars.copy_context().run, illustrator.run, self.router, self.store, ch["title"],
                                            content.notes_md, prof.language)
             quiz: QuizOut = quiz_future.result().value  # the quiz of the FINAL draft (earlier drafts' quizzes are discarded)
+            quiz, quiz_notes = gates.quiz_sanity(self.router, quiz, content.notes_md)
+            for n in quiz_notes:
+                self.router.note("quizzer", "fallback", f"quiz_sanity on '{ch['title'][:40]}'", n)
         visuals = []
         try:
             visuals = illo_future.result(timeout=float(os.environ.get("AASAAN_ILLUSTRATOR_TIMEOUT_S", "90"))).blocks
@@ -334,7 +347,7 @@ class Engine:
         blocks[1:1] = visuals   # pictures sit right after the notes they illustrate
         for v in res.videos:
             blocks.append({"type": "video", "verified": True, "content": {"video_id": v.extra["video_id"], "title": v.title, "channel": v.source,
-                                                                        "url": v.url}})
+                                                                        "url": v.url, "start": v.extra.get("start", 0)}})
         for im in res.images:
             blocks.append({"type": "image", "verified": True, "content": {
                 "url": im.url, "title": im.title, "attribution": {"author": im.extra.get("author", ""), "license": im.extra.get("license", ""),

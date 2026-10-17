@@ -87,6 +87,17 @@ Code draws, models only decide and fill small JSON. `backend/app/visuals/`: `spe
 `agents/illustrator.py` runs after the Critic approves the notes, concurrently with the quiz, with `AASAAN_ILLUSTRATOR_TIMEOUT_S` (default 90). One batched decision per chapter (Noul "would a picture help" + Choice of kind) through the `decisions` chain; with no provider answering, rules apply (Python snippet -> code flowchart, otherwise nothing). Spec kinds go to the `illustrator` role (gemma_26b, gemma_31b, sarvam_gemma4, deterministic_only), one repair per model; free-form diagrams are Mermaid, parse-checked and converted; real figures are never model-drawn. One batched faithfulness gate drops low-confidence visuals. At most 3 visuals per chapter, cached by hash(topic, kind, section) across notebooks. A visual that fails is skipped with an event and never blocks the chapter. Block type `visual`: `kind`, `payload` (svg + spec, or url), `alt_text`, `caption`, `attribution`, `source_tool`, `verified`.
 Not verified: visual quality of the SVG layouts was checked by the overlap/fit test and by reading, not by eye in a browser; no live model has filled a spec yet; Openverse response fields come from the docs, not a live result; `AASAAN_IMAGE_GEN=off` is the only mode (there is no image generator).
 
+## Decision gates (Milestone 2.1, step f)
+
+All in `backend/app/agents/gates.py`, all through `router.decide` (Jev, Jev via OpenRouter, Mercury Decide, Gemma; one batched call per provider; unsure answers escalate; every skip and escalation is an event), each with a code fallback and none able to block work by failing.
+- **page_health**: after each fetch tier (`web.fetch_page`): a cookie wall, login, CAPTCHA or error page (code pattern first, then Noul) sends the fetcher to the next tier.
+- **claim_support**: before the Critic. Every claim sentence gets a Noul against the source chunks. All supported -> the Critic model is skipped (code checks still run); otherwise only the flagged claims go into the Critic prompt. No sources or no provider -> the Critic runs as before.
+- **scoper**: track (Choice) and level (Score) before the Architect; the track goes into the outline prompt, the level is used when the notebook has none. Student data: Mercury is never used.
+- **video_marker**: chapter markers parsed from the YouTube description (same key and budget as search), one batched Choice per chapter; the block carries `start` and the player opens at that second. Unsure or "none" -> 0:00.
+- **quiz_sanity**: a Noul per question ("exactly one correct, and it is the marked one"); doubtful questions are dropped while at least 3 remain, otherwise the quiz is kept and an event says so.
+- **input_gate**: on a plain goal only (never with pasted material, links or files). Only a confident "unsafe" (0.7) or "not a request" (0.85) is refused, with a friendly message; 6 s timeout; student data.
+Not verified live: none of these has been run against the real Jev or Mercury Decide (no TypeSafe key is set; the OpenRouter route was only probed earlier). Thresholds (0.5 / 0.6 / 0.4 / 0.7 / 0.85) are my starting values, not tuned on data. The Mercury Decide free tier's rate limits and data policy are unconfirmed, which is why it is excluded from student-data gates.
+
 ## Operating notes
 
 - Logs: lines prefixed `[aasaan]`; every fallback and retry has its reason. `GET /api/events` (admin) shows the same in the database.
@@ -98,4 +109,5 @@ Not verified: visual quality of the SVG layouts was checked by the overlap/fit t
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | Milestone 2.1: resilience module, ToolRunner, chaos, health/tools, Pexels removed, decision chain, Illustrator, Jev gates. |
 | 2026-10-16 | First version (single learning path), then the Aasaan rebuild: M1 router and health, M2-M5 notebook pipeline, worker, UI, learning loop, M6 deploy and acceptance. |

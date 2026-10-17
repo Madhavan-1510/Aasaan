@@ -23,7 +23,7 @@ import threading
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote, unquote, urlparse
 
 import httpx
@@ -62,6 +62,30 @@ RUNNER: Optional[ToolRunner] = None
 def set_runner(runner: Optional[ToolRunner]) -> None:
     global RUNNER
     RUNNER = runner
+
+
+# page_health gate: (url, title, text) -> (healthy, reason). Set by the engine; None = no gate (plain length check only).
+PAGE_GATE: Optional[Callable[[str, str, str], tuple]] = None
+
+
+def set_page_gate(fn: Optional[Callable[[str, str, str], tuple]]) -> None:
+    global PAGE_GATE
+    PAGE_GATE = fn
+
+
+def _page_ok(url: str, title: str, text: str, tier: int, errors: list) -> bool:
+    """Is what this tier returned the real page? A wall/login/CAPTCHA/error page makes the fetcher try the next tier."""
+    if PAGE_GATE is None:
+        return True
+    try:
+        healthy, reason = PAGE_GATE(url, title, text)
+    except Exception as e:  # a broken gate must never stop reading pages
+        log.warning("[aasaan] page_health gate failed: %s", e)
+        return True
+    if not healthy:
+        errors.append(f"tier{tier}: page_health: {reason}")
+        log.info("[aasaan] page_health rejected tier %d for %s: %s", tier, url, reason)
+    return healthy
 
 
 def tool(name: str, fn, **kw) -> ToolResult:
@@ -218,9 +242,11 @@ def fetch_page(url: str, store=None) -> PageResult:
             if r.status_code < 400 and ("html" in ctype or "text" in ctype):
                 text = extract_text(r.text)
                 if len(text) >= MIN_TEXT_CHARS:
-                    return _cache(store, PageResult(True, str(getattr(r, "url", url)), _html_title(r.text), text[:20000],
-                                                    _meta_description(r.text), 0))
-                errors.append(f"tier0: only {len(text)} chars")
+                    if _page_ok(url, _html_title(r.text), text, 0, errors):
+                        return _cache(store, PageResult(True, str(getattr(r, "url", url)), _html_title(r.text), text[:20000],
+                                                        _meta_description(r.text), 0))
+                else:
+                    errors.append(f"tier0: only {len(text)} chars")
             else:
                 errors.append(f"tier0: HTTP {r.status_code} {ctype}")
         except Exception as e:
@@ -236,9 +262,10 @@ def fetch_page(url: str, store=None) -> PageResult:
             return {"title": title, "text": body}
 
         res = tool("jina", jina, validate=_thin(MIN_TEXT_CHARS), summary=f"jina read {host}")
-        if res.ok:
+        if res.ok and _page_ok(url, res.data["title"], res.data["text"], 1, errors):
             return _cache(store, PageResult(True, url, res.data["title"], res.data["text"][:20000], "", 1))
-        errors.append(f"tier1 jina: [{res.error.kind}] {res.error.message}")
+        if not res.ok:
+            errors.append(f"tier1 jina: [{res.error.kind}] {res.error.message}")
         # Tier 2: Firecrawl (last tier; needs FIRECRAWL_API_KEY; capped per notebook; off for the session after a 401/402)
         def firecrawl():
             r = http_post("https://api.firecrawl.dev/v2/scrape", headers={"Authorization": f"Bearer {os.environ.get('FIRECRAWL_API_KEY', '')}"},
@@ -248,9 +275,9 @@ def fetch_page(url: str, store=None) -> PageResult:
             return {"title": (data.get("metadata") or {}).get("title", ""), "text": (data.get("markdown") or "").strip()}
 
         res = tool("firecrawl", firecrawl, validate=_thin(MIN_TEXT_CHARS), summary=f"firecrawl scrape {host}")
-        if res.ok:
+        if res.ok and _page_ok(url, res.data["title"], res.data["text"], 2, errors):
             return _cache(store, PageResult(True, url, res.data["title"], res.data["text"][:20000], "", 2))
-        if res.error.kind != "unconfigured":
+        if not res.ok and res.error.kind != "unconfigured":
             errors.append(f"tier2 firecrawl: [{res.error.kind}] {res.error.message}")
     msg = "I couldn't read that page, please paste the text"
     log.warning("[aasaan] fetch_page failed for %s: %s", url, "; ".join(errors))
@@ -324,6 +351,19 @@ def discover_youtube(query: str, n: int = 4) -> list[Candidate]:
     res = tool("youtube", search, cache_key=f"search:{n}:{query.lower()}", summary=f"youtube search '{query[:40]}'")
     return [Candidate(f"y{i}", "video", f"https://www.youtube.com/watch?v={v['id']}", v["title"], v["channel"], extra={"video_id": v["id"]})
             for i, v in enumerate(res.value_or({}).get("videos", []))]
+
+
+def video_markers(video_id: str) -> list[dict]:
+    """Chapter markers from the video description (YouTube Data API, same key and budget as search). [] when there are none."""
+    from .agents.gates import parse_markers
+
+    def fetch():
+        r = http_get("https://www.googleapis.com/youtube/v3/videos", params={"part": "snippet", "id": video_id, "key": os.environ.get("YOUTUBE_API_KEY", "")})
+        items = _json(r, "youtube video").get("items") or []
+        return {"description": ((items[0].get("snippet") or {}).get("description", "") if items else "")}
+
+    res = tool("youtube", fetch, cache_key=f"markers:{video_id}", summary=f"youtube description {video_id}")
+    return parse_markers(res.value_or({}).get("description", ""))
 
 
 def youtube_id(url: str) -> Optional[str]:

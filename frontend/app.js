@@ -300,7 +300,7 @@ function blockHtml(b) {
     case "notes": return `<section class="blk" data-b="${b.id}"><div class="blk-h"><h3>Notes</h3><button class="linkbtn" data-edit="${b.id}">${ICON.edit} Edit</button></div>
       <div class="md" id="md-${b.id}">${renderMarkdown(c.markdown)}</div></section>`;
     case "slides": return `<section class="blk" data-b="${b.id}"><div class="blk-h"><h3>Slides</h3></div><div class="slides" id="sl-${b.id}" tabindex="0" aria-label="Slides"></div></section>`;
-    case "video": return `<section class="blk"><figure class="video"><div class="ratio"><iframe src="https://www.youtube.com/embed/${encodeURIComponent(c.video_id)}" title="${esc(c.title)}"
+    case "video": return `<section class="blk"><figure class="video"><div class="ratio"><iframe src="https://www.youtube.com/embed/${encodeURIComponent(c.video_id)}${Number(c.start) > 0 ? "?start=" + Math.floor(Number(c.start)) : ""}" title="${esc(c.title)}"
       loading="lazy" allow="accelerometer; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
       <figcaption>${esc(c.title)} <span class="muted">· ${esc(c.channel)}</span></figcaption></figure></section>`;
     case "image": { const a = c.attribution || {}; return `<section class="blk"><figure class="img"><img src="${esc(c.url)}" alt="${esc(c.title)}" loading="lazy" referrerpolicy="no-referrer">
