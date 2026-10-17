@@ -96,3 +96,17 @@ def test_files_are_served_only_from_the_upload_folder(tmp_path, sample_text):
         assert cl.get(f"/api/notebooks/{nid}/resources/zzz/preview").status_code == 404
         assert cl.get(f"/api/notebooks/{nid}/resources").json()["mine"][-1]["has_file"] is True
         assert cl.delete(f"/api/notebooks/{nid}/resources/{sid}").json()["removed"] == sid
+
+
+def test_every_notebook_gets_one_of_the_four_thumbnails_and_it_never_changes(engine, worker, store):
+    from pathlib import Path
+    from app.engine import COVER_IMAGES, cover_image
+    folder = Path(__file__).resolve().parents[2] / "frontend" / "resources"
+    assert all((folder / n).is_file() for n in COVER_IMAGES) and len(COVER_IMAGES) == 4
+    seen = {cover_image(f"nb_{i:04d}") for i in range(200)}
+    assert seen == set(COVER_IMAGES)                                              # all four get used
+    nid = engine.create_notebook("L1", "Teach me binary search", "en", [])
+    first = engine.notebook_view(nid)["cover"]
+    worker.run_until_idle()                                                       # the title changes when the outline arrives; the cover must not
+    assert engine.notebook_view(nid)["cover"] == first == cover_image(nid)
+    assert engine.list_notebooks("L1")[0]["cover"] == first

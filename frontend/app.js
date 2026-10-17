@@ -89,10 +89,15 @@ async function home() {
   });
 }
 
+function coverHtml(img, title) {
+  return `<img src="/static/resources/${esc(img || "thumb01.jpg")}" alt="" loading="lazy"><span class="cover-scrim" aria-hidden="true"></span><span class="cover-title">${esc(title)}</span>`;
+}
+
 function nbCard(n) {
   const pct = n.progress.total ? Math.round(100 * n.progress.done / n.progress.total) : 0;
   const busy = n.status !== "complete" && n.status !== "failed";
   return `<button class="nb-card" data-id="${n.id}" data-ready="${n.open_ready ? 1 : 0}">
+    <div class="nb-thumb">${coverHtml(n.cover, n.title)}</div>
     <div class="nb-title">${esc(n.title)}</div>
     <div class="meter" aria-hidden="true"><i style="width:${pct}%"></i></div>
     <div class="nb-meta"><span>${n.progress.done} of ${n.progress.total} chapters done</span>
@@ -359,11 +364,8 @@ function renderNote() {
 function renderHead() {
   const nb = S.nb; if (!document.getElementById("nbtitle")) return;
   document.getElementById("nbtitle").textContent = nb.title;
-  const cv = document.getElementById("cover");   // generated cover, inlined so it follows the theme tokens
-  if (cv && cv.dataset.t !== nb.title) {
-    cv.dataset.t = nb.title;
-    fetch(`/api/notebooks/${nb.id}/cover.svg?t=${encodeURIComponent(nb.title)}`).then((r) => r.ok ? r.text() : "").then((t) => { if (cv.dataset.t === nb.title) cv.innerHTML = t; }).catch(() => {});
-  }
+  const cv = document.getElementById("cover");   // one of the four thumbnails, with the title on top
+  if (cv) cv.innerHTML = coverHtml(nb.cover, nb.title);
   document.getElementById("nbdesc").innerHTML = esc(nb.description || "") + ((nb.sources || []).length
     ? `<span class="srcs">Based on: ${nb.sources.map((x) => x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc((x.title || x.url).slice(0, 40))}</a>` : `<span>${esc(x.title.slice(0, 40))}</span>`).join(" · ")}</span>` : "")
     + ((nb.warnings || []).length ? `<span class="srcs">${nb.warnings.map(esc).join(" · ")}</span>` : "");

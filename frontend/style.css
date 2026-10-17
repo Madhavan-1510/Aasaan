@@ -482,3 +482,20 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 
 .chat-empty { margin: auto; text-align: center; color: var(--muted); max-width: 240px; display: grid; justify-items: center; gap: 10px; font-size: .92rem; animation: msgin .4s ease; }
 .chat-empty .pul { width: 36px; height: 36px; } .chat-empty .pul svg { width: 20px; height: 20px; } .chat-empty p { margin: 0; }
+
+/* notebook thumbnails (frontend/resources/thumb0N.jpg) with the title over a soft scrim, readable on all four images */
+.cover, .nb-thumb { position: relative; overflow: hidden; background: var(--blue-soft); }
+.cover img, .nb-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cover-scrim { position: absolute; inset: 0; background: linear-gradient(to top, rgba(10,10,14,.72), rgba(10,10,14,.12) 62%, transparent); pointer-events: none; }
+.cover-title { position: absolute; left: 12px; right: 12px; bottom: 9px; color: #fff; font-family: var(--serif); font-size: 1.05rem; line-height: 1.2; text-shadow: 0 1px 6px rgba(0,0,0,.45);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nbhead .cover { aspect-ratio: 16 / 9; width: 230px; border-radius: 14px; border: 1px solid var(--line); }
+.nbhead .cover .cover-title { font-size: 1.1rem; }
+.nb-thumb { aspect-ratio: 16 / 9; border-radius: 10px; margin-bottom: 12px; }
+.nb-thumb .cover-title { display: none; }
+.nb-card .nb-thumb .cover-scrim { background: linear-gradient(to top, rgba(10,10,14,.25), transparent 50%); }
+@media (max-width: 860px) { .nbhead .cover { width: 100%; max-width: 360px; } }
+.nbhead { grid-template-columns: 230px minmax(0, 1fr) minmax(190px, 230px); }
+.nbhead .cover .cover-title { display: none; }                      /* the heading beside it already says it */
+.nbhead .cover .cover-scrim { background: linear-gradient(to top, rgba(10,10,14,.22), transparent 55%); }
+@media (max-width: 860px) { .nbhead { grid-template-columns: 1fr; } }

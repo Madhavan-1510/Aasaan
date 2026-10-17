@@ -65,6 +65,15 @@ def split_request(text: str) -> tuple[Optional[str], str, list[str]]:
     return (rest or None), "", urls
 
 
+COVER_IMAGES = ("thumb01.jpg", "thumb02.jpg", "thumb03.jpg", "thumb04.jpg")
+
+
+def cover_image(nid: str) -> str:
+    """One of the four notebook thumbnails in frontend/resources, picked from the notebook id so it never changes."""
+    import hashlib
+    return COVER_IMAGES[int(hashlib.sha1(nid.encode()).hexdigest(), 16) % len(COVER_IMAGES)]
+
+
 def search_topic(nb: dict) -> str:
     """Short subject for web searches. A long personal goal ("I'm part of the training for ... i need a roadmap") would poison
     every query, so past a short single line the notebook title (the Architect's name for the subject) is used instead."""
@@ -1001,7 +1010,7 @@ class Engine:
                     for c in chs]
         edges = [[p, c["id"]] for c in chs for p in c["prereqs"]]
         first_ready = bool(chs) and chs[0]["status"] == "ready"
-        return {"id": nid, "title": nb["title"], "goal": nb["goal"], "description": nb["description"], "level": nb["level"],
+        return {"id": nid, "cover": cover_image(nid), "title": nb["title"], "goal": nb["goal"], "description": nb["description"], "level": nb["level"],
                 "language": nb["language"], "status": nb["status"], "error": nb["error"],
                 "chapters": view_chs, "edges": edges, "readiness": readiness, "open_ready": first_ready,
                 "your_progress": {"done": done, "total": len(chs), "pct": round(100 * done / len(chs)) if chs else 0},
@@ -1022,7 +1031,7 @@ class Engine:
         out = []
         for nb in self.store.list_notebooks(learner_id):
             v = self.notebook_view(nb["id"])
-            out.append({"id": nb["id"], "title": v["title"], "status": v["status"], "readiness": v["readiness"],
+            out.append({"id": nb["id"], "cover": cover_image(nb["id"]), "title": v["title"], "status": v["status"], "readiness": v["readiness"],
                         "progress": v["progress"], "last_opened": nb["last_opened"], "chapters": len(v["chapters"]),
                         "open_ready": v["open_ready"], "error": v["error"]})
         return out
