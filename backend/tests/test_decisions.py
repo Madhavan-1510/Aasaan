@@ -20,7 +20,7 @@ def sure(p=0.95):
 
 @pytest.fixture
 def r(store, keys):
-    return ModelRouter(store=store, mode="live")
+    return ModelRouter(store=store)
 
 
 def test_typesafe_is_preferred_when_both_keys_exist(r, monkeypatch):
@@ -34,7 +34,7 @@ def test_typesafe_is_preferred_when_both_keys_exist(r, monkeypatch):
 def test_jev_via_openrouter_when_there_is_no_typesafe_key(store, monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key-123456")
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     called = []
     monkeypatch.setattr(r.or_decider, "systemone", lambda m, s, q, t=15: called.append(m) or sure()(m))
     out = r.decide("gate", "state", Q)

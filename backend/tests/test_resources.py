@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.engine import UserError
 from app.main import create_app
+from fake_provider import FakeProvider
 
 
 def notebook_with_material(engine, worker, sample_text):
@@ -80,7 +81,7 @@ def test_pasted_text_becomes_a_resource(engine, worker, store):
 
 
 def test_files_are_served_only_from_the_upload_folder(tmp_path, sample_text):
-    app = create_app(db_path=str(tmp_path / "t.db"), mode="mock", start_worker=False, upload_dir=str(tmp_path / "up"))
+    app = create_app(db_path=str(tmp_path / "t.db"), provider_override=FakeProvider(), start_worker=False, upload_dir=str(tmp_path / "up"))
     with TestClient(app) as cl:
         lid = cl.post("/api/learners").json()["learner_id"]
         nid = cl.post("/api/notebooks", data={"learner_id": lid, "text": sample_text, "language": "en"}).json()["notebook_id"]

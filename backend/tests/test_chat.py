@@ -6,11 +6,12 @@ from fastapi.testclient import TestClient
 
 from app import web
 from app.main import create_app
+from fake_provider import FakeProvider
 
 
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(db_path=str(tmp_path / "t.db"), mode="mock", start_worker=False, upload_dir=str(tmp_path / "up"))) as c:
+    with TestClient(create_app(db_path=str(tmp_path / "t.db"), provider_override=FakeProvider(), start_worker=False, upload_dir=str(tmp_path / "up"))) as c:
         yield c
 
 
@@ -53,7 +54,7 @@ def test_messages_are_delivered_by_cursor_so_a_reconnect_loses_nothing(engine, w
 
 
 def test_chat_answer_streams_validated_text_and_stores_it_with_chips(tmp_path, sample_text):
-    app = create_app(db_path=str(tmp_path / "y.db"), mode="mock", start_worker=False)
+    app = create_app(db_path=str(tmp_path / "y.db"), provider_override=FakeProvider(), start_worker=False)
     with TestClient(app) as cl:
         lid = cl.post("/api/learners").json()["learner_id"]
         nid = cl.post("/api/notebooks", data={"learner_id": lid, "text": sample_text, "language": "en"}).json()["notebook_id"]
@@ -71,10 +72,10 @@ def test_chat_answer_streams_validated_text_and_stores_it_with_chips(tmp_path, s
         assert refs and {r["kind"] for r in refs} <= {"chapter", "resource", "link"} and all(r["label"] for r in refs)
         assert any(r["kind"] == "resource" and r["id"] in {s["id"] for s in store.sources(nid)} for r in refs)
         # a message that is only a link or a file adds a resource and does not ask the answerer anything
-        calls = len([c for c in engine.router.mock.calls if c[0] == "doubt"])
+        calls = len([c for c in engine.router.fake.calls if c[0] == "doubt"])
         r = cl.post(f"/api/notebooks/{nid}/chat", data={"learner_id": lid, "text": "https://example.com/streaming-guide"})
         assert [e[0] for e in events(r.text)] == ["user", "done"]
-        assert len([c for c in engine.router.mock.calls if c[0] == "doubt"]) == calls
+        assert len([c for c in engine.router.fake.calls if c[0] == "doubt"]) == calls
         assert store.sources(nid)[-1]["kind"] == "url" and store.sources(nid)[-1]["meta"]["status"] == "reading"
         r = cl.post(f"/api/notebooks/{nid}/chat", data={"learner_id": lid, "text": ""}, files={"files": ("x.exe", b"1", "application/octet-stream")})
         assert r.status_code == 400 and "only PDFs" in r.json()["detail"]

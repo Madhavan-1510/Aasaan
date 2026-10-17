@@ -80,7 +80,7 @@ def test_openrouter_request_shape(monkeypatch, http):
 
 
 def test_timeout_is_not_retried_on_the_same_model(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     calls = []
 
     def slow(m, p, **k):
@@ -95,7 +95,7 @@ def test_timeout_is_not_retried_on_the_same_model(store, monkeypatch):
 
 
 def test_circuit_breaker_skips_a_failing_model_then_recovers(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     r.breaker_cooldown_s = 0.2
     seen = []
 
@@ -123,13 +123,13 @@ def test_circuit_breaker_skips_a_failing_model_then_recovers(store, monkeypatch)
 
 def test_missing_keys_do_not_trip_the_breaker(store, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     r.call("critic", "p", {}, lambda raw: raw, last_resort=lambda c: {"ok": 1})
     assert r.circuit_open("gemma_31b") == 0
 
 
 def test_thinking_level_is_passed_from_config(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     got = {}
     monkeypatch.setattr(r.providers["gemini_api"], "generate", lambda m, p, **k: got.update(k) or '{"ok": 1}')
     r.call("critic", "p", {}, lambda raw: raw)
@@ -137,7 +137,7 @@ def test_thinking_level_is_passed_from_config(store, monkeypatch):
 
 
 def test_slow_answers_demote_a_model_like_failures(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     r.slow_call_s = 0.05
     import time
 
@@ -155,7 +155,7 @@ def test_slow_answers_demote_a_model_like_failures(store, monkeypatch):
 
 
 def test_startup_demotes_models_that_answer_slowly(store):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     rep = {"models": {"gemma_31b": {"kind": "chat", "status": "ok", "latency_ms": 57000},
                       "gemma_26b": {"kind": "chat", "status": "ok", "latency_ms": 1500},
                       "or_gemma_31b": {"kind": "chat", "status": "failed", "latency_ms": 100}}}
@@ -175,7 +175,7 @@ def test_titles_are_cleaned():
 
 
 def test_startup_demotes_models_that_time_out(store):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     rep = {"models": {"gemma_31b": {"kind": "chat", "status": "failed", "error": "gemini gemma-4-31b-it timed out after 100s (ReadTimeout)"},
                       "gemma_26b": {"kind": "chat", "status": "failed", "error": "gemini HTTP 503 for gemma-4-26b-a4b-it: unavailable"},
                       "sarvam_105b": {"kind": "chat", "status": "failed", "error": "SARVAM_API_KEY is not set"}}}

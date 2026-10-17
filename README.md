@@ -16,10 +16,11 @@ python -m pytest backend -q                                                     
 python scripts/acceptance.py                                                      # the 8 acceptance checks, against the running server
 ```
 
-- **No keys:** the app runs in a clearly labelled **demo mode** (an orange banner; placeholder content, real web lookups).
-- **With `GEMINI_API_KEY` in `.env`:** live mode. Copy `.env.example` and fill it in. Other keys (Sarvam, Jev, YouTube, ...) are optional.
+- **`GEMINI_API_KEY` in `.env` is required.** Copy `.env.example` and fill it in. Other keys (Sarvam, Jev, YouTube, ...) are optional.
+- **No key:** the app starts, shows a banner ("No AI model is connected"), and refuses to build notebooks. There is no demo or mock mode.
+- **Tests** (`pytest backend/tests`) never call a real model: they inject a test double (`backend/tests/fake_provider.py`).
 - **Check your models:** `GET /api/health/models` calls each configured model once and reports `ok` or `failed` with the error.
-  In live mode this also runs at startup and logs one line per model. Nothing falls back silently: every fallback is recorded with its reason.
+  This also runs at startup and logs one line per model. Nothing falls back silently: every fallback is recorded with its reason.
 
 ## How it works
 

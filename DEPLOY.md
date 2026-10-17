@@ -34,7 +34,7 @@ Fill in `.env`:
 
 | Variable | Needed | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | **yes** | Google AI Studio. Without it the app runs in clearly labelled demo mode. |
+| `GEMINI_API_KEY` | **yes** | Google AI Studio. Without it the app shows "No AI model is connected" and cannot build notebooks. |
 | `AASAAN_DOMAIN` | yes (prod) | Your domain, e.g. `aasaan.example.com`. Unset = `localhost`. |
 | `AASAAN_ADMIN_TOKEN` | **yes (prod)** | Long random string. Protects `/api/events` and `/api/admin/*`. Without it those are localhost-only. |
 | `SARVAM_API_KEY` | optional | Indian-language chat, voice, translation. |

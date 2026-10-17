@@ -50,7 +50,7 @@ def test_model_judgement_rejects_a_tier_and_every_tier_failing_says_why(fake_web
 def test_no_decision_provider_means_accept_the_page(fake_web, router, monkeypatch):
     fake_web.get(lambda url, p: FakeResp(200, "<html></html>") if url == "https://x.example.com/a" else None)
     monkeypatch.setattr(web, "extract_text", lambda html: GOOD)
-    web.set_page_gate(lambda url, title, text: gates.page_health(router, url, title, text))      # mock mode: decide() is None
+    web.set_page_gate(lambda url, title, text: gates.page_health(router, url, title, text))      # test provider: decide() is None
     assert web.fetch_page("https://x.example.com/a").ok
 
 
@@ -68,7 +68,7 @@ def content():
 def test_all_claims_supported_skips_the_critic_model(router, store, monkeypatch):
     monkeypatch.setattr(router, "decide", lambda g, s, q, **kw: {qid: {"type": "noul", "noul": 0.95, "_by": "jev"} for qid in q})
     out = critic.run(router, content(), CHUNKS, LearnerProfile(learner_id="l"))
-    assert out.value.verdict == "approve" and [c for c in router.mock.calls if c[0] == "critic"] == []
+    assert out.value.verdict == "approve" and [c for c in router.fake.calls if c[0] == "critic"] == []
     assert any("Critic model not needed" in e["summary"] for e in store.events())
 
 
@@ -79,12 +79,12 @@ def test_only_flagged_claims_reach_the_critic(router, store, monkeypatch):
     monkeypatch.setattr(router, "call", lambda role, prompt, *a, **k: (seen.update(prompt=prompt), orig(role, prompt, *a, **k))[1])
     critic.run(router, content(), CHUNKS, LearnerProfile(learner_id="l"))
     assert '"flagged_claims": ["It needs about 20 comparisons' in seen["prompt"]
-    assert [c for c in router.mock.calls if c[0] == "critic"]
+    assert [c for c in router.fake.calls if c[0] == "critic"]
 
 
 def test_claim_support_without_sources_or_providers_changes_nothing(router):
     assert gates.claim_support(router, NOTES, []) is None
-    assert gates.claim_support(router, NOTES, CHUNKS) is None                      # mock mode: no provider answered
+    assert gates.claim_support(router, NOTES, CHUNKS) is None                      # test provider: no provider answered
 
 
 # ------------------------------------------------------------------------------------------- scoper
@@ -99,7 +99,7 @@ def test_scoper_reads_track_and_level_and_never_sends_student_data_to_mercury(ro
 def test_mercury_is_really_skipped_for_student_data_gates(store, monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key-123456")
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     used = []
     for name, client in (("jev", r.jev), ("or", r.or_decider)):
         monkeypatch.setattr(client, "systemone", lambda m, s, q, t=15, n=name: used.append(m) or (_ for _ in ()).throw(ProviderError("down")))
@@ -173,7 +173,7 @@ def test_input_gate_runs_with_student_data_and_a_short_timeout(router, monkeypat
 def test_with_jev_and_mercury_disabled_gemma_decides_and_events_say_so(store, monkeypatch):
     for k in ("TYPESAFE_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(k, raising=False)
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     monkeypatch.setattr(r.providers["gemini_api"], "generate", lambda *a, **k: '{"real": {"noul": 0.9}}')
     healthy, _ = gates.page_health(r, "https://x.example.com", "T", GOOD)
     assert healthy
@@ -185,7 +185,7 @@ def test_with_jev_and_mercury_disabled_gemma_decides_and_events_say_so(store, mo
 def test_gate_escalation_is_recorded_when_jev_is_unsure(store, monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key-123456")
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     monkeypatch.setattr(r.jev, "systemone", lambda m, s, q, t=15: {"real": {"type": "noul", "noul": 0.5}})
     monkeypatch.setattr(r.or_decider, "systemone", lambda m, s, q, t=15: {"real": {"type": "noul", "noul": 0.9}})
     assert gates.page_health(r, "https://x.example.com", "T", GOOD)[0]

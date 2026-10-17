@@ -1,4 +1,4 @@
-"""The asyncio worker and the HTTP API (demo/mock mode)."""
+"""The asyncio worker and the HTTP API (FakeProvider test double)."""
 import asyncio
 import time
 
@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.worker import Worker
+from fake_provider import FakeProvider
 
 
 def test_worker_limits_concurrency_and_finishes_everything(engine, store):
@@ -42,7 +43,7 @@ def test_worker_limits_concurrency_and_finishes_everything(engine, store):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.delenv("AASAAN_ADMIN_TOKEN", raising=False)
-    app = create_app(db_path=str(tmp_path / "t.db"), mode="mock", upload_dir=str(tmp_path / "up"))
+    app = create_app(db_path=str(tmp_path / "t.db"), provider_override=FakeProvider(), upload_dir=str(tmp_path / "up"))
     with TestClient(app) as c:
         yield c
 
@@ -63,7 +64,7 @@ def test_full_http_flow(client):
     sid = client.post("/api/session/open", json={"learner_id": lid}).json()["session_id"]
     nid = client.post("/api/notebooks", data={"learner_id": lid, "text": "I want to learn DSA", "language": "en"}).json()["notebook_id"]
     v = wait_for(client, nid, "open_ready")  # opens as soon as the outline and chapter 1 are ready
-    assert 3 <= len(v["chapters"]) <= 20 and v["mode"] == "mock"
+    assert 3 <= len(v["chapters"]) <= 20 and v["mode"] == "test"
     assert client.get("/api/notebooks", params={"learner_id": lid}).json()[0]["id"] == nid
 
     cid = v["chapters"][0]["id"]
@@ -101,7 +102,7 @@ def test_uploads_are_validated(client):
 
 def test_per_ip_notebook_cap(tmp_path, monkeypatch):
     monkeypatch.setenv("AASAAN_NB_PER_HOUR", "1")
-    with TestClient(create_app(db_path=str(tmp_path / "r.db"), mode="mock", start_worker=False)) as c:
+    with TestClient(create_app(db_path=str(tmp_path / "r.db"), provider_override=FakeProvider(), start_worker=False)) as c:
         lid = c.post("/api/learners").json()["learner_id"]
         assert c.post("/api/notebooks", data={"learner_id": lid, "text": "learn math"}).status_code == 200
         assert c.post("/api/notebooks", data={"learner_id": lid, "text": "learn physics"}).status_code == 429
@@ -109,7 +110,7 @@ def test_per_ip_notebook_cap(tmp_path, monkeypatch):
 
 def test_internal_endpoints_are_protected(tmp_path, monkeypatch):
     monkeypatch.setenv("AASAAN_ADMIN_TOKEN", "s3cret")
-    with TestClient(create_app(db_path=str(tmp_path / "a.db"), mode="mock", start_worker=False)) as c:
+    with TestClient(create_app(db_path=str(tmp_path / "a.db"), provider_override=FakeProvider(), start_worker=False)) as c:
         assert c.get("/api/events").status_code == 403
         assert c.post("/api/admin/kill", json={"model": "gemma_31b"}).status_code == 403
         h = {"x-admin-token": "s3cret"}
@@ -119,7 +120,7 @@ def test_internal_endpoints_are_protected(tmp_path, monkeypatch):
 
 def test_health_models_endpoint(client):
     rep = client.get("/api/health/models").json()
-    assert rep["mode"] == "mock" and rep["models"]["gemma_31b"]["id"] == "gemma-4-31b-it" and client.get("/health").json()["ok"]
+    assert rep["mode"] == "test" and rep["models"]["gemma_31b"]["id"] == "gemma-4-31b-it" and client.get("/health").json()["ok"]
 
 
 def test_new_notebooks_are_not_blocked_by_background_chapters(engine, store):
@@ -170,3 +171,12 @@ def test_notebook_jobs_sort_before_chapter_jobs(engine, store):
     store.update_chapter(store.chapters(nid)[3]["id"], priority=80)   # an urgent chapter
     engine.create_notebook("l1", "I want to learn chemistry", "en", [])
     assert store.pending_jobs()[0]["kind"] == "notebook"
+
+
+def test_without_a_model_key_the_app_says_so_and_refuses_to_build(tmp_path):
+    """There is no demo mode: no key means a clear message, not placeholder content."""
+    with TestClient(create_app(db_path=str(tmp_path / "nokey.db"), start_worker=False)) as c:
+        assert c.get("/health").json()["model_ready"] is False
+        lid = c.post("/api/learners").json()["learner_id"]
+        r = c.post("/api/notebooks", data={"learner_id": lid, "text": "Teach me binary search", "language": "en"})
+        assert r.status_code == 400 and "GEMINI_API_KEY" in r.text

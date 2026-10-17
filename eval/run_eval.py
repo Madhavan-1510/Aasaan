@@ -1,9 +1,7 @@
-"""Quality metrics for Aasaan (PRD section 11), runnable offline in mock mode or against real models.
+"""Quality metrics for Aasaan (PRD section 11), run against the REAL models (needs keys, uses quota).
 
-    python eval/run_eval.py                 # mode from env (mock if no GEMINI_API_KEY)
-    python eval/run_eval.py --mode live     # real models: needs keys, uses quota
+    python eval/run_eval.py                 # needs GEMINI_API_KEY in .env
 
-Mock mode proves the plumbing only; the Critic metric is SKIPPED there because the mock always approves.
 The expected labels in eval/data/graded_answers.json are DRAFTS until a teacher confirms them.
 Writes eval/report.md.
 """
@@ -37,9 +35,9 @@ def pct(n: int, d: int) -> float:
     return 100.0 * n / d if d else 0.0
 
 
-def fresh(mode):
+def fresh(mode=None):
     store = Store(":memory:")
-    router = ModelRouter(store=store, mode=mode)
+    router = ModelRouter(store=store)
     engine = Engine(store, router, upload_dir=tempfile.mkdtemp(), retry_delay_s=0)
     return store, router, engine, Worker(engine)
 
@@ -72,8 +70,6 @@ def m_grading(router):
 
 
 def m_critic(router, mode):
-    if mode == "mock":
-        return "SKIPPED", None, "mock Critic always approves; run with --mode live"
     items = json.loads((DATA / "seeded_lessons.json").read_text(encoding="utf-8"))["lessons"]
     chunks_all, _ = intake.chunk_pages("s1", intake.pages_from_text(SAMPLE))
     prof = LearnerProfile(learner_id="eval")
@@ -148,9 +144,11 @@ def m_memory(mode):
 def main() -> int:
     load_env()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["mock", "live"], default=None)
-    args = ap.parse_args()
-    store, router, engine, worker = fresh(args.mode)
+    ap.parse_args()
+    store, router, engine, worker = fresh()
+    if not router.model_ready():
+        print("No AI model is connected: set GEMINI_API_KEY in .env first.")
+        return 2
     mode = router.mode
     rows = [("Grading agreement (20 answers)", *m_grading(router)), ("Critic catches seeded errors", *m_critic(router, mode)),
             ("Chapters with valid source refs", *m_source_refs(mode)), ("Fallback: kill models, notebook still opens", *m_fallback(mode)),
@@ -162,8 +160,6 @@ def main() -> int:
         status = "SKIPPED" if ok is None else ("PASS" if ok else "FAIL")
         failed += int(ok is False)
         lines.append(f"| {name} | {result} | {status} | {note} |")
-    if mode == "mock":
-        lines += ["", "> Mock mode: this proves the plumbing only. Model-quality metrics need `--mode live`."]
     report = "\n".join(lines)
     (ROOT / "eval" / "report.md").write_text(report + "\n", encoding="utf-8")
     print(report)

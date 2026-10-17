@@ -30,7 +30,6 @@ from pydantic import ValidationError
 from .db import Store
 from .providers.base import Provider, ProviderError, ProviderNotConfigured, ProviderTimeout
 from .providers.gemini import GeminiProvider
-from .providers.mock import MockProvider
 from .providers.ollama import OllamaProvider
 from .providers.openrouter import OpenRouterProvider
 from .providers.sarvam import SarvamClient
@@ -90,16 +89,16 @@ class ModelRouter:
         self,
         config_path: str | Path = DEFAULT_CONFIG,
         store: Optional[Store] = None,
-        mode: Optional[str] = None,
+        provider_override: Optional[Provider] = None,
     ):
         with open(config_path, "r", encoding="utf-8") as f:
             self.cfg = yaml.safe_load(f)
         self.store = store
-        # mode: "mock" = every chat model is served by the offline MockProvider (tests, UI work).
-        self.mode = mode or os.environ.get("AASAAN_MODE") or ("live" if os.environ.get("GEMINI_API_KEY") else "mock")
+        # provider_override is for TESTS only: one injected provider serves every chat model. The app itself always talks to the real providers.
+        self.fake = provider_override
+        self.mode = "test" if provider_override is not None else "live"
         self.killed: set[str] = set()  # model names forced to fail (demo: "kill the primary")
         self.chaos = Chaos.from_env()  # AASAAN_CHAOS="model:jev=fail,tool:commons=fail" (shared with the ToolRunner)
-        self.mock = MockProvider()
         p = self.cfg.get("providers", {})
         self.providers: dict[str, Provider] = {
             "gemini_api": GeminiProvider(p.get("gemini_api", {}).get("api_key_env", "GEMINI_API_KEY")),
@@ -176,6 +175,12 @@ class ModelRouter:
         self._event(str(uuid.uuid4()), agent, "none", 0, status, 0, "pass", summary, error)
 
     # ------------------------------------------------------------------ roles
+    CHAT_KEYS = ("GEMINI_API_KEY", "OPENROUTER_API_KEY", "SARVAM_API_KEY")
+
+    def model_ready(self) -> bool:
+        """Is any chat model reachable in principle (a key is set)? False means the app cannot build anything yet."""
+        return self.fake is not None or any(os.environ.get(k) for k in self.CHAT_KEYS)
+
     def role_name(self, role: str, language: Optional[str]) -> str:
         """Use the Indian-language chain (e.g. teacher_indic) when the student's language is not English."""
         if language and language != "en" and f"{role}_indic" in self.cfg["roles"]:
@@ -190,8 +195,8 @@ class ModelRouter:
 
     def _provider_for(self, model_name: str) -> tuple[Provider, str]:
         m = self.cfg["models"][model_name]
-        if self.mode == "mock":
-            return self.mock, m["id"]
+        if self.fake is not None:
+            return self.fake, m["id"]
         return self.providers[m["provider"]], m["id"]
 
     def call(
@@ -369,8 +374,8 @@ class ModelRouter:
         """Ask typed questions through the `decisions` chain (Jev, Jev via OpenRouter, Mercury Decide, then Gemma): ONE batched call per
         provider. A question the provider is unsure about (low confidence) is escalated to the next provider; if nobody is sure the best
         answer is kept and flagged `"unsure": true`. Returns {question_id: answer} (each tagged `_by`) or None when no provider could answer
-        (the caller then uses its own rule). Every skip, failure and escalation is recorded in `events`. Mock mode returns None."""
-        if self.mode == "mock" or not questions:
+        (the caller then uses its own rule). Every skip, failure and escalation is recorded in `events`. With an injected test provider it returns None."""
+        if self.fake is not None or not questions:
             return None
         steps = self._usable_deciders(student_data)
         timeout = timeout_s or self.cfg["roles"]["decisions"].get("timeout_s", 15)
@@ -440,8 +445,8 @@ class ModelRouter:
                 self._event(run_id, name, step, idx, "fallback", 0, "fail", name, "model killed (admin switch)")
                 continue
             m = self.cfg["models"][step]
-            if self.mode == "mock" and m["provider"] != "gemini_api":
-                self._event(run_id, name, step, idx, "fallback", 0, "fail", name, "mock mode: speech models unavailable")
+            if self.fake is not None and m["provider"] != "gemini_api":
+                self._event(run_id, name, step, idx, "fallback", 0, "fail", name, "test provider: speech models unavailable")
                 continue
             t0 = time.perf_counter()
             try:
@@ -466,8 +471,8 @@ class ModelRouter:
             m = models[name]
             kind = m.get("kind", "chat")
             base = {"provider": m["provider"], "id": m["id"], "kind": kind, "optional": bool(m.get("optional"))}
-            if self.mode == "mock":
-                return name, {**base, "status": "mock", "note": "mock mode: models are not called"}
+            if self.fake is not None:
+                return name, {**base, "status": "test", "note": "test provider: models are not called"}
             t0 = time.perf_counter()
             try:
                 if kind == "chat":
@@ -494,7 +499,7 @@ class ModelRouter:
             results = dict(pool.map(check, list(models)))
         failed = [n for n, r in results.items() if r["status"] == "failed" and not r["optional"]]
         features = {}
-        if self.mode != "mock":  # Google Search grounding with Gemma (used by the Curator for discovery)
+        if self.fake is None:  # Google Search grounding with Gemma (used by the Curator for discovery)
             t0 = time.perf_counter()
             try:
                 hits = self.providers["gemini_api"].grounded_search(models["gemma_26b"]["id"], "Find one page about binary search", 80)
@@ -524,12 +529,13 @@ class ModelRouter:
 
     def log_self_test(self) -> dict:
         """Run the self test and write one clear line per model to the server log (called at startup)."""
+        if not self.model_ready():
+            log.error("[aasaan] NO AI MODEL IS CONNECTED: set GEMINI_API_KEY (or OPENROUTER_API_KEY) in .env and restart. Notebooks cannot be built until then.")
+            return {"mode": self.mode, "models": {}, "features": {}, "ok": False}
         rep = self.self_test(force=True)
-        if rep["mode"] != "mock":
-            self.demote_slow_models(rep)
-        if rep["mode"] == "mock":
-            log.warning("[aasaan] MOCK MODE: no real model is being called (set GEMINI_API_KEY for live mode)")
+        if rep["mode"] == "test":
             return rep
+        self.demote_slow_models(rep)
         for name, r in rep.get("features", {}).items():
             (log.info if r["status"] == "ok" else log.warning)("[aasaan] feature %-14s %s %s", name, r["status"], r.get("error", ""))
         for name, r in rep["models"].items():

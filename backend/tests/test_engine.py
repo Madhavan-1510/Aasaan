@@ -1,4 +1,4 @@
-"""The notebook pipeline end to end (demo/mock mode, offline)."""
+"""The notebook pipeline end to end (offline, with the FakeProvider test double)."""
 import pytest
 
 from app.agents import teacher
@@ -6,6 +6,7 @@ from app.router import AllFailed
 from app.schemas import LearnerProfile
 from conftest import FakeResp
 from test_web import ARTICLE, PARAS
+from fake_provider import FakeProvider
 
 LID = "learner-1"
 
@@ -133,7 +134,7 @@ def test_request_validation(engine):
 # --------------------------------------------------------------------- Critic loop, failures, restarts
 def test_unverified_after_two_revisions_is_logged(engine, worker, store):
     issue = {"verdict": "revise", "issues": [{"step": "notes", "problem": "unsupported claim"}], "confidence": 0.6}
-    engine.router.mock.script("critic", [issue, issue, issue])
+    engine.router.fake.script("critic", [issue, issue, issue])
     nid = make(engine)
     engine.process_job(store.pending_jobs()[0]["id"])
     ch1 = engine.chapter_view(engine.notebook_view(nid)["chapters"][0]["id"])
@@ -144,7 +145,7 @@ def test_unverified_after_two_revisions_is_logged(engine, worker, store):
 
 def test_critic_revision_then_approval(engine, worker, store):
     issue = {"verdict": "revise", "issues": [{"step": "notes", "problem": "bad"}], "confidence": 0.6}
-    engine.router.mock.script("critic", [issue])
+    engine.router.fake.script("critic", [issue])
     nid = make(engine)
     engine.process_job(store.pending_jobs()[0]["id"])
     first = engine.notebook_view(nid)["chapters"][0]["id"]
@@ -276,7 +277,7 @@ def test_perfect_quiz_changes_nothing(engine, worker, store):
     out = engine.finish_chapter(LID, sid, ids[0])
     assert out["added"] == [] and len(engine.notebook_view(nid)["chapters"]) == 8
     assert engine.notebook_view(nid)["chapters"][0]["state"] == "done"
-    assert not any(a == "diagnoser" for a, _ in engine.router.mock.calls)  # graded in code, no model call
+    assert not any(a == "diagnoser" for a, _ in engine.router.fake.calls)  # graded in code, no model call
 
 
 def test_at_most_two_review_chapters_per_session(engine, worker, store):
@@ -313,7 +314,7 @@ def test_unsure_diagnosis_asks_for_a_retry_not_a_verdict(engine, worker, store):
     ids = first_two(engine, worker, nid)
     sid = engine.open_session(LID)
     q = next(iter(quiz_keys(store, ids[0]).values()))
-    engine.router.mock.script("diagnoser", [{"question_id": q["id"], "result": "wrong", "misconception": "guess", "confidence": 0.2, "hint": "try again"}])
+    engine.router.fake.script("diagnoser", [{"question_id": q["id"], "result": "wrong", "misconception": "guess", "confidence": 0.2, "hint": "try again"}])
     fb = engine.answer(LID, sid, ids[0], q["id"], next(o for o in q["options"] if o != q["answer_key"]), attempt=1)
     assert fb["follow_up"] and fb["result"] is None and store.attempts(ids[0]) == []
 
@@ -370,17 +371,17 @@ def test_teacher_rejects_verbatim_copying_of_fetched_pages(router):
     copied = content("## Binary search\n\n" + " ".join(PARAS[:4]))
     own = content("## Binary search\n\nThink of guessing a number between one and a hundred: each guess removes half of the options, "
                   "so a sorted list of a million items needs only about twenty looks.")
-    router.mock.script("teacher", [copied, copied, own])
+    router.fake.script("teacher", [copied, copied, own])
     res = teacher.run(router, CH, [PAGE], [], LearnerProfile(learner_id="x"))
     assert "guessing a number" in res.value.notes_md
-    assert [r for r, _ in router.mock.calls if r == "teacher"].__len__() == 3  # two rejected copies, then the rewrite
+    assert [r for r, _ in router.fake.calls if r == "teacher"].__len__() == 3  # two rejected copies, then the rewrite
 
 
 def test_teacher_rejects_unknown_refs_and_wrong_language(router):
     bad_ref = {**content("## T\n\n" + "own words " * 30), "source_refs": ["nope"]}
     wrong_lang = {**content("## T\n\n" + "own words " * 30), "language": "hi"}
     good = content("## T\n\n" + "own words " * 30)
-    router.mock.script("teacher", [bad_ref, bad_ref, wrong_lang, wrong_lang, good])
+    router.fake.script("teacher", [bad_ref, bad_ref, wrong_lang, wrong_lang, good])
     res = teacher.run(router, CH, [PAGE], [], LearnerProfile(learner_id="x"))
     assert res.value.source_refs == ["wabc123-p1-c1"]
 
@@ -424,12 +425,12 @@ def test_real_pdf_bytes_are_extracted_and_cited(engine, worker, store):
 def test_quiz_is_written_while_the_critic_checks_and_matches_the_final_draft(engine, worker, store):
     """With one revision the quiz of the FIRST draft is discarded; the stored quiz belongs to the final draft."""
     issue = {"verdict": "revise", "issues": [{"step": "notes", "problem": "x"}], "confidence": 0.5}
-    engine.router.mock.script("critic", [issue])
+    engine.router.fake.script("critic", [issue])
     nid = make(engine)
     engine.process_job(store.pending_jobs()[0]["id"])
     cid = engine.notebook_view(nid)["chapters"][0]["id"]
     assert len(quiz_keys(store, cid)) >= 3 and store.get_chapter(cid)["meta"]["revisions"] == 1
-    roles = [r for r, _ in engine.router.mock.calls]
+    roles = [r for r, _ in engine.router.fake.calls]
     assert roles.count("quizzer") == 2 and roles.count("teacher") == 2  # one quiz per draft
 
 
@@ -471,7 +472,7 @@ def test_first_session_greeting_is_fixed_text_and_never_says_welcome_back(engine
         store.open_session("L1")
     g = engine.companion_open("L1", nid)
     assert g["is_first_session"] and "Welcome back" not in g["message"] and "taking shape" in g["message"]
-    assert [c for c in engine.router.mock.calls if c[0] == "companion"] == []       # no model wrote it
+    assert [c for c in engine.router.fake.calls if c[0] == "companion"] == []       # no model wrote it
 
 
 def test_returning_greeting_only_with_real_history(engine, worker, store):
@@ -487,12 +488,12 @@ def test_returning_greeting_only_with_real_history(engine, worker, store):
 
 
 def test_unverified_chapter_lists_its_open_claims_and_recheck_can_clear_them(engine, worker, store):
-    engine.router.mock.script("critic", [{"verdict": "revise", "issues": [{"step": "notes", "problem": "Claim X has no support", "source_ref": "nope"}], "confidence": .8}] * 3)
+    engine.router.fake.script("critic", [{"verdict": "revise", "issues": [{"step": "notes", "problem": "Claim X has no support", "source_ref": "nope"}], "confidence": .8}] * 3)
     nid = make(engine, "Teach me binary search")
     engine.process_job(store.pending_jobs()[0]["id"])
     cid = engine.notebook_view(nid)["chapters"][0]["id"]
     ch = engine.chapter_view(cid)
     assert ch["unverified"] and ch["review_issues"][0]["claim"] == "Claim X has no support"
     assert ch["review_issues"][0]["source_status"] == "cited source not in this notebook"
-    out = engine.recheck_chapter(cid)                    # the mock Critic approves once the scripted answers are used up
+    out = engine.recheck_chapter(cid)                    # the fake Critic approves once the scripted answers are used up
     assert out["verified"] and not engine.chapter_view(cid)["unverified"] and engine.chapter_view(cid)["review_issues"] == []

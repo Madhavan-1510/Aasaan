@@ -7,6 +7,7 @@ from app.db import Store
 from app.main import create_app
 from app.resilience import EventSink
 from app.tools import Chaos, ToolFailure, ToolRunner, ToolSpec, check_response
+from fake_provider import FakeProvider
 
 
 class R:  # minimal response
@@ -208,7 +209,7 @@ def test_local_tools_appear_in_health():
 # ------------------------------------------------------------------------------ API
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(db_path=str(tmp_path / "t.db"), mode="mock", start_worker=False)) as c:
+    with TestClient(create_app(db_path=str(tmp_path / "t.db"), provider_override=FakeProvider(), start_worker=False)) as c:
         yield c
 
 
@@ -228,13 +229,13 @@ def test_chaos_switch_over_the_admin_api(client):
 
 def test_chaos_from_the_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("AASAAN_CHAOS", "tool:commons=fail")
-    with TestClient(create_app(db_path=str(tmp_path / "c.db"), mode="mock", start_worker=False)) as c:
+    with TestClient(create_app(db_path=str(tmp_path / "c.db"), provider_override=FakeProvider(), start_worker=False)) as c:
         assert c.get("/api/admin/chaos").json()["spec"] == "tool:commons=fail"
 
 
 def test_model_chaos_forces_fallback_with_a_reason(router, store):
     router.chaos.set("model:gemma_31b=fail")
-    router.mock.script("critic", [{"ok": 1}])
+    router.fake.script("critic", [{"ok": 1}])
     res = router.call("critic", "p", {}, lambda raw: raw)
     assert res.model_used == "gemma_26b"
     assert any("chaos: forced fail" in e["error"] for e in store.events())

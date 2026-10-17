@@ -12,6 +12,7 @@ from app.tools import Chaos, ToolRunner
 from app.visuals import astflow, cover, mermaid, render, safeexpr, specs
 from app.visuals.figures import license_ok
 from conftest import FakeResp
+from fake_provider import FakeProvider
 
 CODE_NOTES = """## Linear search
 Linear search checks every item in the list in order until it finds the target value, then it stops and reports where it was.
@@ -42,7 +43,7 @@ def decisions(kind, wants=0.9):
 
 @pytest.fixture
 def r(store):
-    return ModelRouter(store=store, mode="mock")
+    return ModelRouter(store=store, provider_override=FakeProvider())
 
 
 def agent_events(store, agent="illustrator"):
@@ -150,12 +151,12 @@ def test_python_snippet_becomes_a_flowchart_with_no_model_call(r, store):
     c = out.blocks[0]["content"]
     assert c["kind"] == "flowchart" and c["source_tool"] == "ast_flowchart" and c["payload"]["svg"].startswith("<svg") and c["alt_text"] and c["caption"]
     assert out.blocks[0]["type"] == "visual" and out.blocks[0]["verified"] is True
-    assert [call for call in r.mock.calls if call[0] == "illustrator"] == []          # no model was asked to draw anything
+    assert [call for call in r.fake.calls if call[0] == "illustrator"] == []          # no model was asked to draw anything
     assert any("no model call" in e["error"] for e in agent_events(store))
 
 
 def test_without_any_decision_provider_rules_pick_code_flowcharts_only(r, store):
-    out = illustrator.run(r, store, "Mixed", CODE_NOTES + "\n" + LL_NOTES)               # mock mode: decide() returns None
+    out = illustrator.run(r, store, "Mixed", CODE_NOTES + "\n" + LL_NOTES)               # test provider: decide() returns None
     assert [b["content"]["source_tool"] for b in out.blocks] == ["ast_flowchart"]
     assert any("by rules" in e["summary"] for e in agent_events(store))
 
@@ -167,13 +168,13 @@ def test_linked_list_chapter_gets_a_validated_spec_drawn_by_code(r, store):
     c = out.blocks[0]["content"]
     assert c["kind"] == "linked_list" and c["source_tool"] == "spec_renderer"
     assert c["payload"]["spec"]["values"] == [4, 8, 15] and "prefers-color-scheme: dark" in c["payload"]["svg"]
-    assert [call[0] for call in r.mock.calls] == ["illustrator"]                         # one model call filled the spec
+    assert [call[0] for call in r.fake.calls] == ["illustrator"]                         # one model call filled the spec
 
 
 def test_invalid_spec_gets_one_repair_then_the_next_model_and_the_chapter_still_completes(r, store):
     r.decide = decisions("linked_list")
     bad = {"type": "linked_list", "title": "t", "alt_text": "a", "values": list(range(40))}
-    r.mock.script("illustrator", [bad, bad, bad, bad, bad, bad])                       # every model, repair included, is wrong
+    r.fake.script("illustrator", [bad, bad, bad, bad, bad, bad])                       # every model, repair included, is wrong
     out = illustrator.run(r, store, "Linked lists", LL_NOTES)
     assert out.blocks == [] and out.skipped
     evs = agent_events(store)
@@ -184,7 +185,7 @@ def test_invalid_spec_gets_one_repair_then_the_next_model_and_the_chapter_still_
 
 def test_one_repair_fixes_a_first_bad_spec(r, store):
     r.decide = decisions("array")
-    r.mock.script("illustrator", [{"type": "array", "title": "t", "alt_text": "a", "values": list(range(40))}])
+    r.fake.script("illustrator", [{"type": "array", "title": "t", "alt_text": "a", "values": list(range(40))}])
     out = illustrator.run(r, store, "Arrays", "## Arrays\nAn array stores values 3, 1 and 4 at consecutive positions, each found by its index number.\n")
     assert out.blocks and out.blocks[0]["content"]["kind"] == "array"
     assert any("invalid output" in e["error"] for e in agent_events(store))
@@ -192,7 +193,7 @@ def test_one_repair_fixes_a_first_bad_spec(r, store):
 
 def test_free_form_diagram_is_mermaid_checked_then_converted(r, store):
     r.decide = decisions("diagram")
-    r.mock.script("illustrator", [{"mermaid": "flowchart TD\nA --- B", "title": "t", "alt_text": "a"}])   # bad first, repaired by the mock default
+    r.fake.script("illustrator", [{"mermaid": "flowchart TD\nA --- B", "title": "t", "alt_text": "a"}])   # bad first, repaired by the mock default
     out = illustrator.run(r, store, "Process", "## A simple process\nFirst we start, then we do the step, and then we finish the whole process in order.\n")
     assert out.blocks and out.blocks[0]["content"]["source_tool"] == "mermaid_checked"
     assert any("subgraph" in e["error"] or "arrow" in e["error"] for e in agent_events(store))
@@ -207,7 +208,7 @@ def test_max_three_visuals_per_chapter(r, store):
 def test_physical_diagram_requests_are_never_model_drawn(r, store, fake_web):
     r.decide = decisions("diagram")
     out = illustrator.run(r, store, "Human heart anatomy", HEART_NOTES)
-    assert out.blocks == [] and [c for c in r.mock.calls if c[0] == "illustrator"] == []
+    assert out.blocks == [] and [c for c in r.fake.calls if c[0] == "illustrator"] == []
 
 
 # --------------------------------------------------------------------- acceptance: faithfulness gate
@@ -251,7 +252,7 @@ def test_biology_chapter_gets_a_commons_svg_figure_with_licence_and_attribution(
     assert c["attribution"] == {"author": "Jane Doe", "license": "CC BY-SA 4.0", "source": "Wikimedia Commons",
                                 "page_url": "https://commons.wikimedia.org/wiki/File:Human_heart_diagram.svg"}
     assert c["alt_text"] and c["caption"]
-    assert [call for call in r.mock.calls if call[0] == "illustrator"] == []          # the model never draws a real figure
+    assert [call for call in r.fake.calls if call[0] == "illustrator"] == []          # the model never draws a real figure
 
 
 def test_a_figure_with_a_non_free_licence_is_not_used(r, store, fake_web):
@@ -289,9 +290,9 @@ def test_commons_down_falls_to_openverse_both_down_ships_without_a_figure(r, sto
 def test_second_notebook_on_the_same_topic_reuses_cached_visuals(r, store):
     r.decide = decisions("linked_list")
     first = illustrator.run(r, store, "Linked lists", LL_NOTES)
-    calls_after_first = len([c for c in r.mock.calls if c[0] == "illustrator"])
+    calls_after_first = len([c for c in r.fake.calls if c[0] == "illustrator"])
     second = illustrator.run(r, store, "Linked lists", LL_NOTES)
-    assert second.blocks == first.blocks and len([c for c in r.mock.calls if c[0] == "illustrator"]) == calls_after_first
+    assert second.blocks == first.blocks and len([c for c in r.fake.calls if c[0] == "illustrator"]) == calls_after_first
     assert any("cache hit" in e["summary"] for e in agent_events(store))
 
 
@@ -319,7 +320,7 @@ def test_visuals_are_stored_as_blocks_right_after_the_notes(engine, worker, stor
 def client(tmp_path):
     from fastapi.testclient import TestClient
     from app.main import create_app
-    with TestClient(create_app(db_path=str(tmp_path / "t.db"), mode="mock", start_worker=False)) as c:
+    with TestClient(create_app(db_path=str(tmp_path / "t.db"), provider_override=FakeProvider(), start_worker=False)) as c:
         yield c
 
 
@@ -368,5 +369,7 @@ def test_frontend_sets_the_theme_before_first_paint_and_defines_both_token_sets(
     fe = Path(__file__).resolve().parents[2] / "frontend"
     html, css = (fe / "index.html").read_text(encoding="utf-8"), (fe / "style.css").read_text(encoding="utf-8")
     assert html.index("aasaan_theme") < html.index("style.css")                                  # inline script runs before the stylesheet
-    for token in ('[data-theme="light"]', '[data-theme="dark"]', ":root:not([data-theme])", "--vz-node-fill", "--cv-bg1", "--accent-fg"):
+    for token in ('[data-theme="light"]', '[data-theme="dark"]', "--vz-node-fill", "--cv-bg1", "--accent-fg"):
         assert token in css, token
+    assert "prefers-color-scheme" not in css                                                   # light is the default whatever the OS says
+    assert 'role="switch"' in (fe / "app.js").read_text(encoding="utf-8")

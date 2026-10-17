@@ -12,7 +12,7 @@ def ok_validator(raw):
 
 
 def test_live_calls_are_cached_by_input_hash(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     calls = []
     monkeypatch.setattr(r.providers["gemini_api"], "generate", lambda m, p, **k: calls.append(p) or '{"ok": 1}')
     first = r.call("critic", "same prompt", {}, ok_validator)
@@ -24,7 +24,7 @@ def test_live_calls_are_cached_by_input_hash(store, monkeypatch):
 
 
 def test_invalid_replies_are_never_cached(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     replies = iter(['{"bad": 1}', '{"bad": 1}', '{"ok": 2}'])  # invalid twice on the first model, then valid on the next
     monkeypatch.setattr(r.providers["gemini_api"], "generate", lambda m, p, **k: next(replies))
     r.call("critic", "p", {}, ok_validator)
@@ -33,15 +33,15 @@ def test_invalid_replies_are_never_cached(store, monkeypatch):
     assert n_cached == 1  # only the validated reply was stored
 
 
-def test_mock_mode_does_not_cache(router, store):
-    router.mock.script("critic", [{"ok": 1}, {"ok": 2}])
+def test_test_provider_does_not_cache(router, store):
+    router.fake.script("critic", [{"ok": 1}, {"ok": 2}])
     assert router.call("critic", "p", {}, ok_validator).value == {"ok": 1}
     assert router.call("critic", "p", {}, ok_validator).value == {"ok": 2}
 
 
 def test_global_semaphore_limits_concurrent_model_calls(store, monkeypatch):
     monkeypatch.setenv("AASAAN_MAX_CALLS", "2")
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     active, peak, lock = 0, 0, threading.Lock()
 
     def slow(m, p, **k):
@@ -68,7 +68,7 @@ def test_note_records_an_event_with_reason(router, store):
 
 
 def test_self_test_includes_grounded_search_feature(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     for p in r.providers.values():
         monkeypatch.setattr(p, "generate", lambda *a, **k: "OK")
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {})

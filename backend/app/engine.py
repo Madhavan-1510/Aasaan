@@ -127,6 +127,8 @@ class Engine:
     # ============================================================= notebooks
     def create_notebook(self, learner_id: str, text: str, language: str, files: list[tuple[str, str, bytes]]) -> str:
         """Validate the chat-box request, store the inputs, queue phase 0+1. Returns the notebook id immediately."""
+        if not self.router.model_ready():
+            raise UserError("Aasaan isn't connected to an AI model yet. Add GEMINI_API_KEY to the .env file (see .env.example) and restart the server.")
         goal, material, urls = split_request(text)
         if not (goal or material or urls or files):
             raise UserError("Type a goal, paste notes or links, or attach a photo or PDF.")

@@ -1,7 +1,7 @@
 """Aasaan API + static frontend.
 
 Run from the repo root:  python -m uvicorn app.main:create_app --factory --app-dir backend
-Mode: AASAAN_MODE=mock (clearly labelled demo mode, no keys) or live (needs GEMINI_API_KEY; automatic when the key is set).
+Needs GEMINI_API_KEY (or OPENROUTER_API_KEY). Without a key the app starts, says so everywhere, and refuses to build notebooks: there is no demo mode.
 """
 from __future__ import annotations
 
@@ -92,12 +92,12 @@ class ChaosIn(BaseModel):
     spec: str = ""
 
 
-def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_test_on_start: Optional[bool] = None,
+def create_app(db_path: Optional[str] = None, provider_override=None, self_test_on_start: Optional[bool] = None,
                start_worker: bool = True, upload_dir: Optional[str] = None) -> FastAPI:
     load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = Store(db_path or os.environ.get("AASAAN_DB") or str(ROOT / "data" / "aasaan.db"))
-    router = ModelRouter(store=store, mode=mode)
+    router = ModelRouter(store=store, provider_override=provider_override)
     tools = ToolRunner(store, router.sink, router.chaos)
     visuals.register(tools)
     engine = Engine(store, router, upload_dir=upload_dir or os.environ.get("AASAAN_UPLOADS") or str(ROOT / "data" / "uploads"), tools=tools)
@@ -108,8 +108,8 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        if router.mode == "mock":
-            log_.warning("[aasaan] DEMO MODE: no model is called; set GEMINI_API_KEY for real generation")
+        if not router.model_ready():
+            log_.error("[aasaan] NO AI MODEL IS CONNECTED: set GEMINI_API_KEY (or OPENROUTER_API_KEY) in .env and restart")
         if self_test_on_start if self_test_on_start is not None else router.mode == "live":
             threading.Thread(target=router.log_self_test, name="aasaan-self-test", daemon=True).start()
         task = asyncio.create_task(worker.run()) if start_worker else None
@@ -145,7 +145,7 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
     @app.get("/api/health")
     @app.get("/health")
     def health():
-        return {"ok": True, "app": "aasaan", "mode": router.mode, "killed": sorted(router.killed)}
+        return {"ok": True, "app": "aasaan", "mode": router.mode, "model_ready": router.model_ready(), "killed": sorted(router.killed)}
 
     @app.get("/api/health/models")
     def health_models(refresh: bool = False):

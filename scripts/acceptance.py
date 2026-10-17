@@ -82,7 +82,10 @@ def main() -> int:
         print(f"Server not reachable at {a.url}: {e}")
         return 2
     mode = health["mode"]
-    print(f"Aasaan acceptance run against {a.url} (mode: {mode})\n")
+    if not health.get("model_ready"):
+        print("The server has no AI model connected (set GEMINI_API_KEY in .env). The acceptance run needs real models.")
+        return 2
+    print(f"Aasaan acceptance run against {a.url}\n")
     cl = Client(a.url, a.admin_token)
     nid1 = None
 
@@ -180,12 +183,9 @@ def main() -> int:
         rep = cl.c.get("/api/health/models").json()
         bad = {k: v["error"] for k, v in rep["models"].items() if v["status"] == "failed" and not v.get("optional")}
         states = {k: v["status"] for k, v in rep["models"].items()}
-        rec("5 /api/health/models reports every model", "PASS" if rep["models"] and all(v["status"] in ("ok", "failed", "mock", "skipped") for v in rep["models"].values()) else "FAIL",
+        rec("5 /api/health/models reports every model", "PASS" if rep["models"] and all(v["status"] in ("ok", "failed", "skipped") for v in rep["models"].values()) else "FAIL",
             f"mode={rep['mode']} {states}")
-        if rep["mode"] != "mock":
-            rec("5b every required model is ok", "PASS" if not bad else "FAIL", json.dumps(bad)[:300])
-        else:
-            rec("5b every required model is ok", "SKIP", "mock mode: no keys, models are not called")
+        rec("5b every required model is ok", "PASS" if not bad else "FAIL", json.dumps(bad)[:300])
     except Exception as e:
         rec("5 model health", "FAIL", str(e))
 

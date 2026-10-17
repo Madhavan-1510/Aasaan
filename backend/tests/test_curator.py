@@ -16,7 +16,7 @@ def cands(*urls):
 @pytest.fixture
 def live(store, monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")  # a decision provider is configured; its HTTP call is patched per test
-    return ModelRouter(store=store, mode="live")
+    return ModelRouter(store=store)
 
 
 def test_jev_gate_is_one_batched_call_keeping_probable_yes(live, monkeypatch):

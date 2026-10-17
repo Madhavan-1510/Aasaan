@@ -13,6 +13,7 @@ from app.providers.sarvam_chat import SarvamChatProvider
 from app.providers.typesafe import TypeSafeClient
 from app.router import NON_MODEL_STEPS, ModelRouter
 from app.schemas import Question
+from fake_provider import FakeProvider
 
 
 class Resp:
@@ -159,7 +160,7 @@ def test_jev_request_and_errors(monkeypatch, http):
 
 
 def test_decide_logs_why_a_decision_model_was_skipped(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -171,7 +172,7 @@ def test_decide_logs_why_a_decision_model_was_skipped(store, monkeypatch):
     assert not any(e["agent"] == "decisions" for e in store.events()[: len(store.events()) - n])  # said once, not on every call
 
 
-def test_decide_is_silent_noop_in_mock_mode(router, store):
+def test_decide_is_silent_noop_with_the_test_provider(router, store):
     assert router.decide("diagnoser", "s", {}) is None
     assert store.events() == []
 
@@ -182,7 +183,7 @@ def _question():
 
 def test_diagnoser_uses_jev_label_when_known(store, monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {
         "correct": {"type": "noul", "noul": 0.02},
         "misconception": {"type": "choice", "choice": "confuses speed and velocity", "confidence": 0.9, "probabilities": {}},
@@ -194,7 +195,7 @@ def test_diagnoser_uses_jev_label_when_known(store, monkeypatch):
 
 def test_diagnoser_falls_to_gemma_when_jev_says_other(store, monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {
         "correct": {"noul": 0.1}, "misconception": {"choice": "other", "confidence": 0.9}, "completeness": {"score": 0.2}})
     monkeypatch.setattr(r.providers["gemini_api"], "generate", lambda *a, **k: (
@@ -208,7 +209,7 @@ def test_fallback_events_record_the_reason(router, store):
     router.kill("gemma_31b")
     router.kill("sarvam_gemma4")
     router.kill("or_gemma_31b")
-    router.mock.script("critic", [ProviderError("HTTP 429 quota"), ProviderError("HTTP 429 quota")])
+    router.fake.script("critic", [ProviderError("HTTP 429 quota"), ProviderError("HTTP 429 quota")])
     router.call("critic", "p", {}, lambda raw: raw, last_resort=lambda c: {"ok": 1})
     errors = [e["error"] for e in store.events()]
     assert any("model killed" in x for x in errors)
@@ -219,7 +220,7 @@ def test_fallback_events_record_the_reason(router, store):
 def test_missing_key_is_logged_not_silent(store, monkeypatch, caplog):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("SARVAM_API_KEY", raising=False)
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
     with caplog.at_level("WARNING", logger="aasaan.router"):
         res = r.call("critic", "p", {}, lambda raw: raw, last_resort=lambda c: {"ok": 1})
     assert res.used_last_resort
@@ -228,7 +229,7 @@ def test_missing_key_is_logged_not_silent(store, monkeypatch, caplog):
 
 # ------------------------------------------------------------------- self test
 def test_self_test_reports_each_model(store, monkeypatch):
-    r = ModelRouter(store=store, mode="live")
+    r = ModelRouter(store=store)
 
     def fake_generate(model_id, prompt, **kw):
         if model_id == "gemma-4-26b-a4b-it":
@@ -251,11 +252,11 @@ def test_self_test_reports_each_model(store, monkeypatch):
     assert rep["failed"] == ["gemma_26b"] and rep["ok"] is False  # optional local model does not count
 
 
-def test_health_models_endpoint_in_mock_mode(tmp_path):
+def test_health_models_endpoint_with_the_test_provider(tmp_path):
     from fastapi.testclient import TestClient
     from app.main import create_app
-    c = TestClient(create_app(db_path=str(tmp_path / "h.db"), mode="mock"))
+    c = TestClient(create_app(db_path=str(tmp_path / "h.db"), provider_override=FakeProvider()))
     rep = c.get("/api/health/models").json()
-    assert rep["mode"] == "mock" and rep["ok"] is True
+    assert rep["mode"] == "test" and rep["ok"] is True
     assert rep["models"]["gemma_31b"]["id"] == "gemma-4-31b-it"
     assert c.get("/health").json()["ok"] is True

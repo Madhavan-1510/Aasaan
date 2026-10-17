@@ -11,6 +11,7 @@ from app.db import Store  # noqa: E402
 from app.engine import Engine  # noqa: E402
 from app.router import ModelRouter  # noqa: E402
 from app.worker import Worker  # noqa: E402
+from fake_provider import FakeProvider
 
 SAMPLE = """Motion is the change in position of an object with time. An object is at rest if its position does not change with time with respect to a reference point.
 
@@ -107,7 +108,7 @@ def store():
 
 @pytest.fixture
 def router(store):
-    return ModelRouter(store=store, mode="mock")
+    return ModelRouter(store=store, provider_override=FakeProvider())
 
 
 @pytest.fixture

@@ -16,7 +16,7 @@ def empties(*specs):
 
 
 def ocr_calls(router):
-    return [c for c in router.mock.calls if c[0] == "ocr"]
+    return [c for c in router.fake.calls if c[0] == "ocr"]
 
 
 def test_scanned_pages_are_read_with_vision(engine, renderer):
@@ -28,7 +28,7 @@ def test_scanned_pages_are_read_with_vision(engine, renderer):
 
 
 def test_a_run_of_empty_table_grids_costs_one_probe_not_one_call_per_page(engine, renderer):
-    engine.router.mock.script("ocr", [{"text": "", "empty": True}])
+    engine.router.fake.script("ocr", [{"text": "", "empty": True}])
     pages = ["Some real text about cloud data engineering topics."] + [""] * 66
     out, meta = engine._recover_pages(b"x", pages, empties(*[(p, 0, 3247) for p in range(2, 68)]), "en", "TOC.pdf")
     assert len(ocr_calls(engine.router)) == 1 and renderer == [2]
@@ -67,7 +67,7 @@ def test_vision_budget_is_capped(engine, renderer):
 
 
 def test_notebook_view_reports_issues_per_file_not_as_header_warnings(engine, worker, store, monkeypatch, sample_text, renderer):
-    engine.router.mock.script("ocr", [{"text": "", "empty": True}])
+    engine.router.fake.script("ocr", [{"text": "", "empty": True}])
     monkeypatch.setattr(intake, "analyze_pdf", lambda data: ([sample_text, "", "", ""], empties((2, 0, 3000), (3, 0, 3000), (4, 0, 3000))))
     nid = engine.create_notebook("L1", "", "en", [("toc.pdf", "application/pdf", b"%PDF-1.4 fake")])
     worker.run_until_idle()

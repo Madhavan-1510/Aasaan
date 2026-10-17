@@ -1,6 +1,6 @@
-"""Offline provider (DEMO MODE): returns schema-valid JSON for every role, derived from the context the agent passes in.
-Lets the whole app run with no API keys (tests, UI work, demos). The router labels this mode loudly in the UI and log.
-Supports scripted outputs and call tracking so loops and fallbacks can be tested.
+"""TEST DOUBLE, not part of the app: a provider that returns schema-valid JSON for every role, derived from the context the agent passes in.
+Tests inject it with ModelRouter(provider_override=FakeProvider()). It supports scripted outputs and call tracking so loops and fallbacks can be tested.
+The application itself has no mock or demo mode: without a model key it says so and refuses to build.
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import re
 from typing import Any
 
-from .base import Provider, ProviderError
+from app.providers.base import Provider, ProviderError
 
 
 def _sentences(text: str) -> list[str]:
@@ -24,8 +24,8 @@ ACRONYMS = {"dsa": "data structures and algorithms", "oop": "object-oriented pro
             "os": "operating systems", "ml": "machine learning", "ai": "artificial intelligence", "cn": "computer networks"}
 
 
-class MockProvider(Provider):
-    name = "mock"
+class FakeProvider(Provider):
+    name = "fake"
 
     def __init__(self) -> None:
         self.scripts: dict[str, list[Any]] = {}  # role -> queue of canned outputs (dict, str or Exception)

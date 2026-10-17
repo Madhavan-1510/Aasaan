@@ -4,6 +4,7 @@ import pytest
 from app import edits
 from app.agents import editor, gates
 from app.engine import UserError
+from fake_provider import FakeProvider
 
 
 def outline(n=6, links=True):
@@ -248,7 +249,7 @@ def test_a_resource_covering_new_topics_gets_a_proposal_and_a_covered_one_does_n
 def test_endpoints_apply_undo_dismiss(tmp_path):
     from fastapi.testclient import TestClient
     from app.main import create_app
-    app = create_app(db_path=str(tmp_path / "e.db"), mode="mock", start_worker=False)
+    app = create_app(db_path=str(tmp_path / "e.db"), provider_override=FakeProvider(), start_worker=False)
     with TestClient(app) as cl:
         lid = cl.post("/api/learners").json()["learner_id"]
         nid = cl.post("/api/notebooks", data={"learner_id": lid, "text": "Teach me binary search", "language": "en"}).json()["notebook_id"]
