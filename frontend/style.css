@@ -512,3 +512,16 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 .hero { margin-top: 5vh; }
 @keyframes mascotin { from { opacity: 0; transform: translateY(10px) scale(.96); } }
 @media (prefers-reduced-motion: reduce) { .hero-mascot { animation: none; } }
+
+/* wordmark: English for 5 s, then Tamil for 5 s, and round again (English only with reduced motion) */
+.wordmark { display: grid; align-items: baseline; }
+.wordmark .wm { grid-area: 1 / 1; font-family: var(--serif); line-height: 1.1; white-space: nowrap; }
+.wm-ta { font-size: 1.28rem; opacity: 0; }
+.wm-en { animation: wmEn 10s infinite ease-in-out; } .wm-ta { animation: wmTa 10s infinite ease-in-out; }
+@keyframes wmEn { 0%, 46% { opacity: 1; transform: none; } 50%, 96% { opacity: 0; transform: translateY(-5px); } 100% { opacity: 1; transform: none; } }
+@keyframes wmTa { 0%, 46% { opacity: 0; transform: translateY(5px); } 50%, 96% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(5px); } }
+@media (prefers-reduced-motion: reduce) { .wm-en { animation: none; opacity: 1; } .wm-ta { display: none; } }
+/* mascot circle: dark warm circle in light mode so the pale sketch stands out; amber in dark mode */
+:root { --av-bg: #2b2620; --av-ring: var(--accent); }
+:root[data-theme="dark"] { --av-bg: var(--accent); --av-ring: transparent; }
+.pul, .brand .brand-av, .chat-name .head-av { background: var(--av-bg); box-shadow: 0 0 0 2px var(--av-ring); border: 0; }

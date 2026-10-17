@@ -29,7 +29,7 @@ function cleanup() {
 
 function topbar(right = "") {
   $bar.innerHTML = `${S.modelReady === false ? `<div class="demo" role="alert">No AI model is connected. Add GEMINI_API_KEY to the .env file and restart the server to build notebooks.</div>` : ""}
-    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${avatarImg("brand-av")}<span>Aasaan</span><small lang="ta">ஆசான்</small></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
+    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${avatarImg("brand-av")}<span class="wordmark" aria-hidden="true"><span class="wm wm-en">Aasaan</span><span class="wm wm-ta" lang="ta">ஆசான்</span></span></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
   const tgl = $bar.querySelector("#themetoggle");
   if (tgl) tgl.onclick = () => { const dark = themePref() !== "dark"; setTheme(dark ? "dark" : "light"); tgl.setAttribute("aria-checked", String(dark)); };
 }
