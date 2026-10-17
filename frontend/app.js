@@ -311,6 +311,7 @@ function flashEdits(nb) {
 function chatChip(c) {
   const ws = document.getElementById("ws");
   if (matchMedia("(max-width: 860px)").matches) document.querySelector('#tabbar [data-tab="course"]').click();
+  if (c.kind === "chapter" && !S.nb.chapters.some((x) => x.id === Number(c.id))) { toast("That chapter is no longer in the course."); return; }
   if (c.kind === "chapter") {
     document.getElementById("vt-course").click();
     loadChapter(Number(c.id), false, false).then(() => { if (c.quiz) document.getElementById("quizblk")?.scrollIntoView({ block: "center", behavior: "smooth" }); });
@@ -339,6 +340,8 @@ function onSnapshot(nb) {
   S.nb = nb; renderHead(); renderSide(); S.chat?.onSnapshot(nb); S.res?.onSnapshot();
   if (!S.chapter || !hadChapters || nb.status === "failed") settleCourse();
   flashEdits(nb);
+  const crumb = document.querySelector(".crumb");   // the chapter count can change under the reader (an applied or undone edit)
+  if (crumb && cur) { const i = nb.chapters.findIndex((c) => c.id === cur.id); if (i >= 0) crumb.textContent = `Chapter ${i + 1} of ${nb.chapters.length}${cur.kind === "review" ? " · review" : ""}`; }
   const now = cur && nb.chapters.find((c) => c.id === cur.id);
   if (cur && !now) { S.chapter = null; settleCourse(); return; }   // the chapter being read was removed (or an add was undone)
   if (!now) return;
