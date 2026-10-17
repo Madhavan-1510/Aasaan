@@ -14,6 +14,8 @@ providers:
   typesafe:                   # Jev: a DECISION model (typed answers), not a chat model
     api_key_env: TYPESAFE_API_KEY
     base_url: https://api.typesafe.ai
+  openrouter:                 # optional extra Gemma 4 fallback (same models, different infrastructure)
+    api_key_env: OPENROUTER_API_KEY
   ollama:                     # optional offline mode only (small Gemma sizes are local-only)
     base_url: http://localhost:11434
 
@@ -23,10 +25,16 @@ defaults:
   log_events: true
   max_concurrent_calls: 4   # global limit on simultaneous model calls (AASAAN_MAX_CALLS overrides)
   cache_calls: true         # cache validated model replies by input hash
+  circuit_threshold: 2      # consecutive timeouts/5xx before a model is skipped...
+  circuit_cooldown_s: 90    # ...for this long (then retried)
+  slow_call_s: 40           # answering slower than this counts like a failure for the breaker; the startup check demotes such models
 
 models:
-  gemma_31b:     { provider: gemini_api, kind: chat, id: gemma-4-31b-it }        # strongest: planning, checking, vision
-  gemma_26b:     { provider: gemini_api, kind: chat, id: gemma-4-26b-a4b-it }    # fast: bulk writing
+  # thinking_level: Gemma 4 reasons before answering; "minimal" is far faster and enough for structured JSON tasks
+  gemma_31b:     { provider: gemini_api, kind: chat, id: gemma-4-31b-it, thinking_level: minimal }      # strongest: planning, checking, vision
+  gemma_26b:     { provider: gemini_api, kind: chat, id: gemma-4-26b-a4b-it, thinking_level: minimal }  # fast: bulk writing
+  or_gemma_31b:  { provider: openrouter, kind: chat, id: google/gemma-4-31b-it }
+  or_gemma_26b:  { provider: openrouter, kind: chat, id: google/gemma-4-26b-a4b-it }
   sarvam_gemma4: { provider: sarvam,     kind: chat, id: gemma4 }                # Gemma 4 31B on Sarvam (beta), image capable
   sarvam_105b:   { provider: sarvam,     kind: chat, id: sarvam-105b }           # Indian-language reasoning
   jev:           { provider: typesafe,   kind: decision, id: jev-latest }
@@ -38,18 +46,18 @@ models:
   gemma_local:   { provider: ollama,     kind: chat, id: "gemma4:e4b", optional: true }   # offline mode only
 
 roles:
-  intake:        { chain: [gemma_31b, gemma_26b, sarvam_gemma4, text_only], timeout_s: 60 }
-  architect:     { chain: [gemma_31b, gemma_26b, sarvam_gemma4, linear_path], timeout_s: 60 }
-  curator:       { chain: [jev, gemma_26b, search_order], timeout_s: 20 }
-  teacher:       { chain: [gemma_26b, gemma_31b, sarvam_gemma4, cached_lesson] }
+  intake:        { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, text_only], timeout_s: 45 }
+  architect:     { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, linear_path], timeout_s: 45 }
+  curator:       { chain: [jev, gemma_26b, or_gemma_26b, search_order], timeout_s: 20 }
+  teacher:       { chain: [gemma_26b, gemma_31b, or_gemma_26b, sarvam_gemma4, cached_lesson], timeout_s: 45 }
   teacher_indic: { chain: [sarvam_105b, gemma_31b, cached_lesson] }
-  critic:        { chain: [gemma_31b, gemma_26b, sarvam_gemma4, rule_checks] }
-  quizzer:       { chain: [gemma_26b, gemma_31b, cached_questions] }
-  diagnoser:     { chain: [jev, gemma_26b, exact_match], timeout_s: 10 }
-  rewriter:      { chain: [gemma_26b, gemma_31b, insert_review_step] }
-  companion:     { chain: [gemma_26b, gemma_31b, template_message] }
+  critic:        { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, rule_checks], timeout_s: 40 }
+  quizzer:       { chain: [gemma_26b, gemma_31b, or_gemma_26b, cached_questions] }
+  diagnoser:     { chain: [jev, gemma_26b, or_gemma_26b, exact_match], timeout_s: 10 }
+  rewriter:      { chain: [gemma_26b, gemma_31b, or_gemma_26b, insert_review_step] }
+  companion:     { chain: [gemma_26b, gemma_31b, or_gemma_26b, template_message] }
   companion_indic: { chain: [sarvam_105b, gemma_31b, template_message] }
-  doubt:         { chain: [gemma_26b, gemma_31b, template_answer] }
+  doubt:         { chain: [gemma_26b, gemma_31b, or_gemma_26b, template_answer] }
   doubt_indic:   { chain: [sarvam_105b, gemma_31b, template_answer] }
   # "<role>_indic" is used automatically when the student's language is not English.
 

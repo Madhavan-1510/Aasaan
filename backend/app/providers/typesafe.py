@@ -62,5 +62,5 @@ class JevTextStub(Provider):
     """Jev cannot generate text. If a chain ever sends it a text prompt, fail loudly and move on."""
     name = "typesafe"
 
-    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True):
+    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True, thinking_level=None):
         raise ProviderNotConfigured("Jev is a decision model; it is used through router.decide(), not text chains")

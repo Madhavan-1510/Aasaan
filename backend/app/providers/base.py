@@ -8,6 +8,10 @@ class ProviderError(Exception):
     """Timeout, rate limit, network or server failure. Router retries, then moves on."""
 
 
+class ProviderTimeout(ProviderError):
+    """The call exceeded its timeout. Not retried on the same model (it would just stall again); the router moves on."""
+
+
 class ProviderNotConfigured(ProviderError):
     """Missing key or unsupported call. Never retried; router moves to the next step."""
 
@@ -25,5 +29,6 @@ class Provider:
         images: Optional[list[tuple[str, bytes]]] = None,  # (mime, bytes)
         timeout_s: float = 30,
         json_mode: bool = True,
+        thinking_level: Optional[str] = None,
     ) -> str:
         raise NotImplementedError

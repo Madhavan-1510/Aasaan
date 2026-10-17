@@ -60,15 +60,18 @@ def _seed_cfg() -> dict:
         return {}
 
 
-def gate(router: ModelRouter, chapter_title: str, objectives: list[str], cands: list[web.Candidate]) -> list[web.Candidate]:
+def gate(router: ModelRouter, chapter_title: str, objectives: list[str], cands: list[web.Candidate], language: str = "en") -> list[web.Candidate]:
     """Keep only relevant links/videos. Jev first (one call), Gemma next, search order last."""
     if not cands:
         return []
     by_id = {c.id: c for c in cands}
-    state = {"chapter": chapter_title, "objectives": objectives,
+    lang_name = {"en": "English", "hi": "Hindi", "kn": "Kannada", "ta": "Tamil", "te": "Telugu", "ml": "Malayalam", "bn": "Bengali",
+                 "mr": "Marathi"}.get(language, language)
+    state = {"chapter": chapter_title, "objectives": objectives, "student_language": lang_name,
              "resources": {c.id: {"kind": c.kind, "title": c.title, "source": c.source, "about": c.reason} for c in cands}}
     questions = {c.id: noul(f"Is this resource useful for a student learning the chapter '{chapter_title}'?",
-                            "Directly relevant, accurate and suitable for learning", "Off-topic, spam or too advanced")
+                            f"Directly relevant, accurate, suitable for learning, and in {lang_name} (or clearly language-independent)",
+                            f"Off-topic, spam, too advanced, or in a language other than {lang_name}")
                  for c in cands}
     answers = router.decide("curator", state, questions, summary=f"Jev relevance for '{chapter_title}'")
     if answers:
@@ -89,7 +92,7 @@ def gate(router: ModelRouter, chapter_title: str, objectives: list[str], cands: 
 
     prompt = build_prompt(
         "You are Curator. From the candidate resources, return the ids that are directly relevant, accurate and suitable "
-        "for a student learning this chapter. Drop spam and off-topic items.",
+        f"for a student learning this chapter. Drop spam and off-topic items, and prefer resources in {lang_name}.",
         {"relevant": ["w0", "y1"]}, {"chapter": chapter_title, "objectives": objectives, "candidates": ctx["candidates"]})
     res = router.call("curator", prompt, ctx, validate, last_resort=lambda c: CuratorOut(relevant=[x.id for x in cands]),
                       summary=f"Curator relevance for '{chapter_title}'")
@@ -97,17 +100,19 @@ def gate(router: ModelRouter, chapter_title: str, objectives: list[str], cands: 
 
 
 def curate(router: ModelRouter, store, chapter_title: str, objectives: list[str], goal: str = "",
-           max_pages: int = 2) -> Curated:
+           language: str = "en", max_pages: int = 2) -> Curated:
     """Discovery -> verification (code) -> relevance gate -> capped, ordered results."""
     out = Curated()
     query = f"{chapter_title} {goal}".strip()[:120]
     gem = router.cfg["models"]["gemma_26b"]["id"]
     live = router.mode == "live"
 
+    wait = float(os.environ.get("AASAAN_GROUNDED_TIMEOUT_S", "20"))  # grounded search takes 20-40 s live; never stall a chapter longer
+
     def grounded():
         if not live:
             return []
-        return web.discover_grounded(router.providers["gemini_api"].grounded_search, gem, query)
+        return web.discover_grounded(lambda m, q: router.providers["gemini_api"].grounded_search(m, q, wait), gem, query)
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         futs = {"wiki": pool.submit(web.discover_wikipedia, chapter_title),
@@ -137,7 +142,7 @@ def curate(router: ModelRouter, store, chapter_title: str, objectives: list[str]
     verified = web.verify_all(uniq)
     textual = [c for c in verified if c.kind in ("link", "video")]
     images = [c for c in verified if c.kind == "image" and on_topic(c, topic)]  # same code guard as for Wikipedia hits
-    kept = gate(router, chapter_title, objectives, textual)
+    kept = gate(router, chapter_title, objectives, textual, language)
     out.links = [c for c in kept if c.kind == "link"][:MAX_LINKS]
     out.videos = [c for c in kept if c.kind == "video"][:MAX_VIDEOS]
     lead = [wikipedia_img for wikipedia_img in (web.wikipedia_lead_image(c.url) for c in out.links) if wikipedia_img]

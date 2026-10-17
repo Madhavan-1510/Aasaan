@@ -34,7 +34,7 @@ class MockProvider(Provider):
     def script(self, role: str, outputs: list[Any]) -> None:
         self.scripts[role] = list(outputs)
 
-    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True):
+    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True, thinking_level=None):
         self.calls.append((role, model_id))
         queue = self.scripts.get(role)
         if queue:

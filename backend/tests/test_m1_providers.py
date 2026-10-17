@@ -47,6 +47,7 @@ def test_models_yaml_is_consistent(router):
             assert step in cfg["models"] or step in NON_MODEL_STEPS, f"{role}: unknown step {step}"
     gemini_ids = {m["id"] for m in cfg["models"].values() if m["provider"] == "gemini_api"}
     assert gemini_ids == {"gemma-4-31b-it", "gemma-4-26b-a4b-it"}  # the only Gemma 4 ids the Gemini API serves
+    assert {m["id"] for m in cfg["models"].values() if m["provider"] == "openrouter"} == {"google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it"}
     assert not any("e4b" in m["id"] for m in cfg["models"].values() if m["provider"] == "gemini_api")
     # Jev is never in a text chain position that could be called as chat: decide() handles it
     assert cfg["models"]["jev"]["kind"] == "decision"
@@ -195,6 +196,7 @@ def test_diagnoser_falls_to_gemma_when_jev_says_other(store, monkeypatch):
 def test_fallback_events_record_the_reason(router, store):
     router.kill("gemma_31b")
     router.kill("sarvam_gemma4")
+    router.kill("or_gemma_31b")
     router.mock.script("critic", [ProviderError("HTTP 429 quota"), ProviderError("HTTP 429 quota")])
     router.call("critic", "p", {}, lambda raw: raw, last_resort=lambda c: {"ok": 1})
     errors = [e["error"] for e in store.events()]
@@ -224,6 +226,7 @@ def test_self_test_reports_each_model(store, monkeypatch):
 
     monkeypatch.setattr(r.providers["gemini_api"], "generate", fake_generate)
     monkeypatch.setattr(r.providers["sarvam"], "generate", lambda *a, **k: "OK")
+    monkeypatch.setattr(r.providers["openrouter"], "generate", lambda *a, **k: "OK")
     monkeypatch.setattr(r.providers["ollama"], "generate", lambda *a, **k: (_ for _ in ()).throw(ProviderError("conn refused")))
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {"alive": {"noul": 0.9}})
     monkeypatch.setattr(r.sarvam, "tts", lambda *a, **k: b"wav")

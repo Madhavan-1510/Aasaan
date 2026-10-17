@@ -121,3 +121,14 @@ def test_local_wikipedia_images_without_a_free_licence_are_skipped(fake_web):
                  if "rest_v1/page/summary" in u else None)
     assert web.wikipedia_lead_image("https://en.wikipedia.org/wiki/Something") is None
     assert web.wikipedia_lead_image("https://example.com/wiki/Something") is None
+
+
+def test_grounded_redirect_that_lands_on_youtube_becomes_a_verified_video(live, store, fake_web, monkeypatch):
+    monkeypatch.setattr(live.providers["gemini_api"], "grounded_search", lambda model, prompt, timeout_s=30: [
+        {"uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZ1", "title": "youtube.com"}])
+    monkeypatch.setattr(live.jev, "systemone", lambda model, state, q, timeout_s=15: {k: {"type": "noul", "noul": 0.9} for k in q})
+    fake_web.get(lambda u, p: FakeResp(200, "<html><title>video</title></html>", url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+                 if u.startswith("https://vertexaisearch.cloud.google.com/") else None)
+    fake_web.get(lambda u, p: FakeResp(200, data={"title": "Binary Search", "author_name": "CS"}) if u == "https://www.youtube.com/oembed" else None)
+    out = curator.curate(live, store, "Binary search", ["x"], "algorithms")
+    assert [v.extra["video_id"] for v in out.videos] == ["dQw4w9WgXcQ"] and out.links == []

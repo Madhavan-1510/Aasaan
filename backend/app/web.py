@@ -13,6 +13,7 @@ links, never whole pages in the student's notes.
 from __future__ import annotations
 
 import hashlib
+import html as htmllib
 import ipaddress
 import logging
 import os
@@ -127,9 +128,14 @@ class PageResult:
     error: str = ""
 
 
+def clean_text(s: str) -> str:
+    """Titles/descriptions shown to students: decode HTML entities, replace broken-encoding characters, squash whitespace."""
+    return re.sub(r"\s+", " ", htmllib.unescape(s or "").replace("\ufffd", "-")).strip()
+
+
 def _html_title(html: str) -> str:
     m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
-    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+    return clean_text(m.group(1)) if m else ""
 
 
 def _meta_description(html: str) -> str:
@@ -137,7 +143,7 @@ def _meta_description(html: str) -> str:
                 r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']'):
         m = re.search(pat, html, re.I | re.S)
         if m:
-            return re.sub(r"\s+", " ", m.group(1)).strip()
+            return clean_text(m.group(1))
     return ""
 
 
@@ -422,6 +428,10 @@ def verify_link(c: Candidate) -> Candidate:
     if not allowed_by_robots(final):
         c.extra["drop"] = "robots.txt"
         return c
+    vid = youtube_id(final)
+    if vid:  # a grounded link that really is a YouTube video: verify it as a video (oEmbed), embed with the official player
+        c.kind, c.extra["video_id"], c.url = "video", vid, final
+        return verify_video(c)
     c.url, c.source = final, _domain(final)
     if "html" in ctype:
         html = r.text

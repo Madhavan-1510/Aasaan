@@ -120,3 +120,53 @@ def test_internal_endpoints_are_protected(tmp_path, monkeypatch):
 def test_health_models_endpoint(client):
     rep = client.get("/api/health/models").json()
     assert rep["mode"] == "mock" and rep["models"]["gemma_31b"]["id"] == "gemma-4-31b-it" and client.get("/health").json()["ok"]
+
+
+def test_new_notebooks_are_not_blocked_by_background_chapters(engine, store):
+    """Two slow chapters of an old notebook must not delay the first chapter of a new notebook."""
+    old = engine.create_notebook("l1", "I want to learn algebra", "en", [])
+    engine.process_job(store.pending_jobs()[0]["id"])
+    release = {"go": False}
+    started = {"new": None}
+    real_build = engine.build_chapter
+
+    def build(cid):
+        ch = store.get_chapter(cid)
+        if ch["notebook_id"] == old:
+            while not release["go"]:
+                time.sleep(0.02)  # a slow background chapter
+        elif started["new"] is None:
+            started["new"] = time.time()
+        return real_build(cid)
+
+    engine.build_chapter = build
+
+    async def go():
+        w = Worker(engine, concurrency=2, poll_s=0.02)
+        task = asyncio.create_task(w.run())
+        await asyncio.sleep(0.3)                       # both chapter slots are now busy with the old notebook
+        assert len(w.active) == 2
+        engine.create_notebook("l1", "I want to learn physics", "en", [])
+        for _ in range(300):
+            if started["new"]:
+                break
+            await asyncio.sleep(0.02)
+        got = started["new"] is not None               # the new notebook's first chapter started while the old ones are stuck
+        release["go"] = True
+        for _ in range(500):
+            if store.active_jobs() == 0:
+                break
+            await asyncio.sleep(0.05)
+        w.stop()
+        await asyncio.wait_for(task, 3)
+        return got
+
+    assert asyncio.run(go())
+
+
+def test_notebook_jobs_sort_before_chapter_jobs(engine, store):
+    nid = engine.create_notebook("l1", "I want to learn algebra", "en", [])
+    engine.process_job(store.pending_jobs()[0]["id"])
+    store.update_chapter(store.chapters(nid)[3]["id"], priority=80)   # an urgent chapter
+    engine.create_notebook("l1", "I want to learn chemistry", "en", [])
+    assert store.pending_jobs()[0]["kind"] == "notebook"

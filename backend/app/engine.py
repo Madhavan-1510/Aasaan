@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 import uuid
@@ -265,30 +266,34 @@ class Engine:
         all_chunks = self._all_chunks(nb["id"])
         own = self._chapter_chunks(ch, all_chunks)
 
-        res = curator.curate(self.router, self.store, ch["title"], ch["objectives"], nb["goal"] or nb["title"])
+        res = curator.curate(self.router, self.store, ch["title"], ch["objectives"], nb["goal"] or nb["title"], nb["language"])
         page_chunks = [{"chunk_id": p["chunk_id"], "page": 1, "text": p["text"], "source_id": "web"} for p in res.pages]
         chunks = own + page_chunks
         link_refs = [{"ref": f"url:{c.url}", "title": c.title, "source": c.source, "kind": c.kind} for c in res.links + res.videos]
         allowed_extra = {l["ref"] for l in link_refs}
 
         issues, previous, content, verified, revisions = None, None, None, False, 0
-        for attempt in range(MAX_REVISIONS + 1):
-            content = teacher.run(self.router, ch, chunks, link_refs, prof, issues, previous, self.store).value
-            self.store.set_chapter_status(cid, "checking")
-            review: CriticOut = critic.run(self.router, content, chunks, prof, allowed_extra).value
-            if review.verdict == "approve":
-                verified = True
-                break
-            if attempt == MAX_REVISIONS:
-                self.router.note("critic", "fallback", f"Chapter '{ch['title'][:40]}' shipped unverified",
-                                 f"Critic still had {len(review.issues)} issue(s) after {MAX_REVISIONS} revisions")
-                break
-            revisions += 1
-            issues = [i.model_dump() for i in review.issues]
-            previous = content.model_dump()
-            self.store.set_chapter_status(cid, "drafting")
-        assert content is not None
-        quiz: QuizOut = quizzer.run(self.router, ch, content, chunks, prof, self.store).value
+        quiz_future = None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for attempt in range(MAX_REVISIONS + 1):
+                content = teacher.run(self.router, ch, chunks, link_refs, prof, issues, previous, self.store).value
+                self.store.set_chapter_status(cid, "checking")
+                # the quiz is written while the Critic checks this draft (saves a full round trip on the happy path)
+                quiz_future = pool.submit(quizzer.run, self.router, ch, content, chunks, prof, self.store)
+                review: CriticOut = critic.run(self.router, content, chunks, prof, allowed_extra).value
+                if review.verdict == "approve":
+                    verified = True
+                    break
+                if attempt == MAX_REVISIONS:
+                    self.router.note("critic", "fallback", f"Chapter '{ch['title'][:40]}' shipped unverified",
+                                     f"Critic still had {len(review.issues)} issue(s) after {MAX_REVISIONS} revisions")
+                    break
+                revisions += 1
+                issues = [i.model_dump() for i in review.issues]
+                previous = content.model_dump()
+                self.store.set_chapter_status(cid, "drafting")
+            assert content is not None and quiz_future is not None
+            quiz: QuizOut = quiz_future.result().value  # the quiz of the FINAL draft (earlier drafts' quizzes are discarded)
 
         blocks = [
             {"type": "notes", "content": {"markdown": content.notes_md}, "meta": {"refs": content.source_refs}},

@@ -28,10 +28,11 @@ import yaml
 from pydantic import ValidationError
 
 from .db import Store
-from .providers.base import Provider, ProviderError, ProviderNotConfigured
+from .providers.base import Provider, ProviderError, ProviderNotConfigured, ProviderTimeout
 from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
 from .providers.ollama import OllamaProvider
+from .providers.openrouter import OpenRouterProvider
 from .providers.sarvam import SarvamClient
 from .providers.sarvam_chat import SarvamChatProvider
 from .providers.typesafe import TypeSafeClient, noul
@@ -66,12 +67,19 @@ def parse_json(raw: str) -> Any:
     fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
     if fence:
         text = fence.group(1).strip()
+    def load(t: str):
+        try:
+            return json.loads(t)
+        except json.JSONDecodeError:
+            # models sometimes put raw newlines inside strings or leave trailing commas: both are safe to tolerate
+            return json.loads(re.sub(r",\s*([}\]])", r"\1", t), strict=False)
+
     try:
-        return json.loads(text)
+        return load(text)
     except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
         if start != -1 and end > start:
-            return json.loads(text[start : end + 1])
+            return load(text[start : end + 1])
         raise
 
 
@@ -94,6 +102,7 @@ class ModelRouter:
             "gemini_api": GeminiProvider(p.get("gemini_api", {}).get("api_key_env", "GEMINI_API_KEY")),
             "sarvam": SarvamChatProvider(p.get("sarvam", {}).get("api_key_env", "SARVAM_API_KEY")),
             "ollama": OllamaProvider(p.get("ollama", {}).get("base_url", "http://localhost:11434")),
+            "openrouter": OpenRouterProvider(p.get("openrouter", {}).get("api_key_env", "OPENROUTER_API_KEY")),
         }
         self.sarvam = SarvamClient(p.get("sarvam", {}).get("api_key_env", "SARVAM_API_KEY"),
                                    p.get("sarvam", {}).get("tts_speaker", ""))
@@ -104,6 +113,13 @@ class ModelRouter:
         # global limit on concurrent model calls (rate limits); AASAAN_MAX_CALLS overrides the config
         limit = int(os.environ.get("AASAAN_MAX_CALLS") or self.defaults.get("max_concurrent_calls", 4))
         self._sem = threading.BoundedSemaphore(max(1, limit))
+        # circuit breaker: a model that keeps timing out or failing server-side is skipped for a cooldown, so one slow
+        # model does not add its full timeout to every call (it is retried after the cooldown)
+        self._consec_fail: dict[str, int] = {}
+        self._open_until: dict[str, float] = {}
+        self.breaker_threshold = int(self.defaults.get("circuit_threshold", 2))
+        self.breaker_cooldown_s = float(self.defaults.get("circuit_cooldown_s", 90))
+        self.slow_call_s = float(self.defaults.get("slow_call_s", 40))
 
     # ------------------------------------------------------------ admin hooks
     def kill(self, model: str) -> None:
@@ -137,6 +153,21 @@ class ModelRouter:
         for mime, data in images or []:
             h.update(mime.encode() + hashlib.sha256(data).digest())
         return "llm:" + h.hexdigest()
+
+    def circuit_open(self, model: str) -> float:
+        """Seconds left before a tripped model is tried again (0 = closed)."""
+        return max(0.0, self._open_until.get(model, 0.0) - time.time())
+
+    def _record(self, model: str, ok: bool) -> None:
+        if ok:
+            self._consec_fail[model] = 0
+            self._open_until.pop(model, None)
+            return
+        n = self._consec_fail.get(model, 0) + 1
+        self._consec_fail[model] = n
+        if n >= self.breaker_threshold:
+            self._open_until[model] = time.time() + self.breaker_cooldown_s
+            log.warning("[aasaan] circuit OPEN for %s after %d consecutive failures; skipping it for %.0fs", model, n, self.breaker_cooldown_s)
 
     def note(self, agent: str, status: str, summary: str, error: str = "") -> None:
         """Record a non-call event (for example a chapter shipped unverified) with its reason."""
@@ -202,7 +233,13 @@ class ModelRouter:
                 self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label, "model killed (admin switch)")
                 continue
 
+            left = self.circuit_open(step)
+            if left > 0:
+                self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label,
+                            f"circuit open: {step} failed {self._consec_fail.get(step, 0)} times in a row; skipped for another {left:.0f}s")
+                continue
             provider, model_id = self._provider_for(step)
+            thinking = self.cfg["models"][step].get("thinking_level")
             cur_prompt = prompt
             for attempt in range(max_retries + 1):
                 last_try = attempt == max_retries
@@ -215,15 +252,28 @@ class ModelRouter:
                     else:
                         with self._sem:
                             raw = provider.generate(model_id, cur_prompt, role=role, context=context, images=images,
-                                                    timeout_s=timeout)
+                                                    timeout_s=timeout, thinking_level=thinking)
                 except ProviderNotConfigured as e:
                     self._event(run_id, role, step, step_idx, "fallback", 0, "fail", label, str(e))
                     break
+                except ProviderTimeout as e:  # retrying the same slow model would only stall again
+                    ms = int((time.perf_counter() - t0) * 1000)
+                    self._record(step, False)
+                    self._event(run_id, role, step, step_idx, "fallback", ms, "fail", label, str(e))
+                    break
                 except ProviderError as e:
                     ms = int((time.perf_counter() - t0) * 1000)
+                    self._record(step, False)
                     self._event(run_id, role, step, step_idx, "fallback" if last_try else "retry", ms, "fail", label, str(e))
+                    if self.circuit_open(step) > 0:
+                        break
                     continue
                 ms = int((time.perf_counter() - t0) * 1000)
+                if cached is None:
+                    # a model that keeps answering far too slowly is demoted like one that fails (it still gets this answer used)
+                    self._record(step, ms / 1000 <= self.slow_call_s)
+                    if ms / 1000 > self.slow_call_s:
+                        log.warning("[aasaan] %s answered in %.0fs (slow threshold %.0fs)", step, ms / 1000, self.slow_call_s)
                 try:
                     value = validator(parse_json(raw))
                 except (ValueError, ValidationError, TypeError, KeyError) as e:  # JSONDecodeError is a ValueError
@@ -312,7 +362,7 @@ class ModelRouter:
             try:
                 if kind == "chat":
                     out = self.providers[m["provider"]].generate(m["id"], "Reply with the single word: OK", role="health",
-                                                                 timeout_s=25, json_mode=False)
+                                                                 timeout_s=100, json_mode=False, thinking_level=m.get("thinking_level"))
                     if not out.strip():
                         raise ProviderError("empty reply")
                 elif kind == "decision":
@@ -337,19 +387,37 @@ class ModelRouter:
         if self.mode != "mock":  # Google Search grounding with Gemma (used by the Curator for discovery)
             t0 = time.perf_counter()
             try:
-                hits = self.providers["gemini_api"].grounded_search(models["gemma_26b"]["id"], "Find one page about binary search", 25)
+                hits = self.providers["gemini_api"].grounded_search(models["gemma_26b"]["id"], "Find one page about binary search", 80)
                 features["grounded_search"] = {"status": "ok" if hits else "failed", "results": len(hits),
                                                "error": "" if hits else "no grounding results returned",
                                                "latency_ms": int((time.perf_counter() - t0) * 1000)}
             except Exception as e:
                 features["grounded_search"] = {"status": "failed", "error": str(e)[:300]}
-        report = {"mode": self.mode, "ok": not failed, "failed": failed, "models": results, "features": features}
+        report = {"mode": self.mode, "ok": not failed, "failed": failed, "models": results, "features": features,
+                  "circuit_open": {m: round(self.circuit_open(m)) for m in models if self.circuit_open(m) > 0}}
         self._health_cache = (time.time(), report)
         return report
+
+    def demote_slow_models(self, report: dict, cooldown_s: float = 300) -> list[str]:
+        """After the startup self test: chat models that answered a trivial prompt slower than `slow_call_s` start with an open
+        circuit, so the first real calls do not each wait out a full timeout on them. They are retried after the cooldown."""
+        demoted = []
+        for name, res in report.get("models", {}).items():
+            err = (res.get("error") or "").lower()
+            unhealthy = res["status"] == "failed" and ("timed out" in err or " http 5" in err or "http 503" in err)
+            if res.get("kind") == "chat" and ((res["status"] == "ok" and res.get("latency_ms", 0) / 1000 > self.slow_call_s) or unhealthy):
+                self._consec_fail[name] = self.breaker_threshold
+                self._open_until[name] = time.time() + cooldown_s
+                demoted.append(name)
+                log.warning("[aasaan] %s is slow or unhealthy at startup (%.0fs, %s): skipping it for %.0fs", name, res.get("latency_ms", 0) / 1000,
+                            res["status"], cooldown_s)
+        return demoted
 
     def log_self_test(self) -> dict:
         """Run the self test and write one clear line per model to the server log (called at startup)."""
         rep = self.self_test(force=True)
+        if rep["mode"] != "mock":
+            self.demote_slow_models(rep)
         if rep["mode"] == "mock":
             log.warning("[aasaan] MOCK MODE: no real model is being called (set GEMINI_API_KEY for live mode)")
             return rep

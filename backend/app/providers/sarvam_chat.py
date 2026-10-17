@@ -11,7 +11,7 @@ import os
 
 import httpx
 
-from .base import Provider, ProviderError, ProviderNotConfigured
+from .base import Provider, ProviderError, ProviderNotConfigured, ProviderTimeout
 
 BASE = "https://api.sarvam.ai"
 
@@ -22,7 +22,7 @@ class SarvamChatProvider(Provider):
     def __init__(self, api_key_env: str = "SARVAM_API_KEY"):
         self.api_key_env = api_key_env
 
-    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True):
+    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True, thinking_level=None):
         key = os.environ.get(self.api_key_env)
         if not key:
             raise ProviderNotConfigured(f"{self.api_key_env} is not set")
@@ -33,6 +33,8 @@ class SarvamChatProvider(Provider):
         try:
             r = httpx.post(f"{BASE}/v2/chat/completions", headers={"api-subscription-key": key}, json=body,
                            timeout=timeout_s)
+        except httpx.TimeoutException as e:
+            raise ProviderTimeout(f"timed out after {timeout_s}s: {type(e).__name__}") from e
         except httpx.HTTPError as e:
             raise ProviderError(f"sarvam transport error: {type(e).__name__}: {e}") from e
         if r.status_code != 200:

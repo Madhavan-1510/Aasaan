@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import web  # noqa: E402
+import app.main  # noqa: E402,F401  (imported so the fixture can patch load_env)
 from app.db import Store  # noqa: E402
 from app.engine import Engine  # noqa: E402
 from app.router import ModelRouter  # noqa: E402
@@ -53,6 +54,16 @@ class FakeWeb:
         if url.endswith("/robots.txt"):
             return FakeResp(404, "")
         raise RuntimeError(f"unexpected network call in test: {url}")
+
+
+@pytest.fixture(autouse=True)
+def no_real_keys(monkeypatch):
+    """Tests never read the real .env and never see real API keys, so nothing can reach a paid service."""
+    import app.main
+    monkeypatch.setattr(app.main, "load_env", lambda *a, **k: None)
+    for k in ("GEMINI_API_KEY", "SARVAM_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "YOUTUBE_API_KEY", "PEXELS_API_KEY",
+              "JINA_API_KEY", "FIRECRAWL_API_KEY", "AASAAN_ADMIN_TOKEN", "AASAAN_MODE"):
+        monkeypatch.delenv(k, raising=False)
 
 
 @pytest.fixture(autouse=True)

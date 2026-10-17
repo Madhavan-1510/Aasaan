@@ -419,3 +419,15 @@ def test_real_pdf_bytes_are_extracted_and_cited(engine, worker, store):
     src = store.sources(nid)[0]
     assert src["kind"] == "pdf" and "halves the sorted range" in " ".join(c["text"] for c in src["chunks"])
     assert v["status"] == "complete" and v["sources"][0]["chunks"] >= 1
+
+
+def test_quiz_is_written_while_the_critic_checks_and_matches_the_final_draft(engine, worker, store):
+    """With one revision the quiz of the FIRST draft is discarded; the stored quiz belongs to the final draft."""
+    issue = {"verdict": "revise", "issues": [{"step": "notes", "problem": "x"}], "confidence": 0.5}
+    engine.router.mock.script("critic", [issue])
+    nid = make(engine)
+    engine.process_job(store.pending_jobs()[0]["id"])
+    cid = engine.notebook_view(nid)["chapters"][0]["id"]
+    assert len(quiz_keys(store, cid)) >= 3 and store.get_chapter(cid)["meta"]["revisions"] == 1
+    roles = [r for r, _ in engine.router.mock.calls]
+    assert roles.count("quizzer") == 2 and roles.count("teacher") == 2  # one quiz per draft

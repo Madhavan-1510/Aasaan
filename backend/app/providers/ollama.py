@@ -5,7 +5,7 @@ import base64
 
 import httpx
 
-from .base import Provider, ProviderError
+from .base import Provider, ProviderError, ProviderTimeout
 
 
 class OllamaProvider(Provider):
@@ -14,7 +14,7 @@ class OllamaProvider(Provider):
     def __init__(self, base_url: str = "http://localhost:11434"):
         self.base_url = base_url.rstrip("/")
 
-    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True):
+    def generate(self, model_id, prompt, *, role="", context=None, images=None, timeout_s=30, json_mode=True, thinking_level=None):
         body = {"model": model_id, "prompt": prompt, "stream": False}
         if json_mode:
             body["format"] = "json"
@@ -22,6 +22,8 @@ class OllamaProvider(Provider):
             body["images"] = [base64.b64encode(d).decode() for _, d in images]
         try:
             r = httpx.post(f"{self.base_url}/api/generate", json=body, timeout=timeout_s)
+        except httpx.TimeoutException as e:
+            raise ProviderTimeout(f"timed out after {timeout_s}s: {type(e).__name__}") from e
         except httpx.HTTPError as e:
             raise ProviderError(f"ollama transport error: {e}") from e
         if r.status_code != 200:

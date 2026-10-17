@@ -319,7 +319,7 @@ class Store:
     def pending_jobs(self) -> list[dict]:
         """Queued jobs that are due, most urgent first: chapter priority, then notebook order."""
         rows = self._all(
-            "SELECT j.*, COALESCE(c.priority,0) AS prio, COALESCE(c.position,0) AS pos FROM jobs j "
+            "SELECT j.*, CASE WHEN j.kind='notebook' THEN 90 ELSE COALESCE(c.priority,0) END AS prio, COALESCE(c.position,0) AS pos FROM jobs j "
             "LEFT JOIN chapters c ON c.id=j.chapter_id WHERE j.state='queued' AND j.scheduled_at<=? "
             "ORDER BY prio DESC, pos ASC, j.id ASC", (time.time(),))
         return [dict(r) for r in rows]
