@@ -352,3 +352,21 @@ def test_pexels_is_gone_everywhere():
     hits = [str(p.relative_to(root)) for p in list(root.glob("backend/app/**/*.py")) + [root / "config" / "models.yaml", root / ".env.example"]
             if "pexels" in p.read_text(encoding="utf-8").lower()]
     assert hits == []
+
+
+# --------------------------------------------------------------------- theming (Milestone 3)
+def test_diagrams_and_covers_use_theme_tokens_with_standalone_fallbacks():
+    s = specs.parse_spec(SAMPLES[0])
+    svg = render.render(s).svg
+    assert "var(--vz-node-fill,#eef1fa)" in svg and "var(--vz-node-fill,#232a3d)" in svg          # token first, light then dark fallback
+    cv = cover.cover_svg("Cloud Data Engineering")
+    assert "var(--cv-bg1" in cv and "var(--cv-ink" in cv and 'style="--h:' in cv and "#" not in cv.split("<style>")[0].replace("&#", "")
+
+
+def test_frontend_sets_the_theme_before_first_paint_and_defines_both_token_sets():
+    from pathlib import Path
+    fe = Path(__file__).resolve().parents[2] / "frontend"
+    html, css = (fe / "index.html").read_text(encoding="utf-8"), (fe / "style.css").read_text(encoding="utf-8")
+    assert html.index("aasaan_theme") < html.index("style.css")                                  # inline script runs before the stylesheet
+    for token in ('[data-theme="light"]', '[data-theme="dark"]', ":root:not([data-theme])", "--vz-node-fill", "--cv-bg1", "--accent-fg"):
+        assert token in css, token

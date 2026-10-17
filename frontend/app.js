@@ -1,5 +1,5 @@
 // Aasaan UI: Home -> Loading -> Notebook (roadmap + graph + chapter page). The agents are never shown.
-import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording } from "./util.js";
+import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, themePref, setTheme } from "./util.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderGraph, legend } from "./graph.js";
 
@@ -26,7 +26,18 @@ function cleanup() {
 
 function topbar(right = "") {
   $bar.innerHTML = `${S.mode === "mock" ? `<div class="demo" role="status">Demo mode: no AI model is connected, so content is a placeholder. Add GEMINI_API_KEY to generate real notebooks.</div>` : ""}
-    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${ICON.logo}<span>Aasaan</span><small lang="ta">ஆசான்</small></a><div class="bar-right">${right}</div></div>`;
+    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${ICON.logo}<span>Aasaan</span><small lang="ta">ஆசான்</small></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
+  $bar.querySelectorAll("[data-theme-set]").forEach((b) => { b.onclick = () => { setTheme(b.dataset.themeSet); topbarThemeSync(); }; });
+}
+
+function themeSwitch() {
+  const cur = themePref();
+  return `<div class="theme" role="group" aria-label="Theme">${[["system", "Auto"], ["light", "Light"], ["dark", "Dark"]]
+    .map(([k, t]) => `<button type="button" data-theme-set="${k}" aria-pressed="${cur === k}" aria-label="${k === "system" ? "Match system theme" : t + " theme"}">${t}</button>`).join("")}</div>`;
+}
+function topbarThemeSync() {
+  const cur = themePref();
+  $bar.querySelectorAll("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === cur)));
 }
 
 async function init() {
@@ -181,7 +192,7 @@ function loading(nid) {
 async function notebook(nid, cid) {
   $app.className = "wide";
   topbar(`<button class="linkbtn" id="finish">Finish for today</button>`);
-  $app.innerHTML = `<div class="nbhead"><div><h1 id="nbtitle"></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
+  $app.innerHTML = `<div class="nbhead"><div class="cover" id="cover" aria-hidden="false"></div><div><h1 id="nbtitle"></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
     <div id="note"></div>
     <div class="nb"><button class="chaps-toggle" id="chaps" aria-expanded="false">${ICON.list} Chapters</button>
       <aside class="side" id="side" aria-label="Chapters"></aside><section class="main" id="main" aria-live="polite"></section></div>`;
@@ -225,6 +236,11 @@ function renderNote() {
 function renderHead() {
   const nb = S.nb; if (!document.getElementById("nbtitle")) return;
   document.getElementById("nbtitle").textContent = nb.title;
+  const cv = document.getElementById("cover");   // generated cover, inlined so it follows the theme tokens
+  if (cv && cv.dataset.t !== nb.title) {
+    cv.dataset.t = nb.title;
+    fetch(`/api/notebooks/${nb.id}/cover.svg`).then((r) => r.ok ? r.text() : "").then((t) => { if (cv.dataset.t === nb.title) cv.innerHTML = t; }).catch(() => {});
+  }
   document.getElementById("nbdesc").innerHTML = esc(nb.description || "") + ((nb.sources || []).length
     ? `<span class="srcs">Based on: ${nb.sources.map((x) => x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc((x.title || x.url).slice(0, 40))}</a>` : `<span>${esc(x.title.slice(0, 40))}</span>`).join(" · ")}</span>` : "")
     + ((nb.warnings || []).length ? `<span class="srcs warn">${nb.warnings.map(esc).join(" · ")}</span>` : "");

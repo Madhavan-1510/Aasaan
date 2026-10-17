@@ -15,20 +15,27 @@ from xml.sax.saxutils import escape
 from . import safeexpr
 from .specs import (ArraySpec, FlowchartSpec, GraphSpec, LinkedListSpec, PlotSpec, StackQueueSpec, TableSpec, TimelineSpec, TreeSpec)
 
-STYLE = (
-    "<style>"
-    ".vz-node{fill:#eef1fa;stroke:#4b5b8a;stroke-width:1.5}.vz-hl{fill:#fde9c8;stroke:#c4561d;stroke-width:1.8}"
-    ".vz-start{fill:#e3f2ea;stroke:#2e7d5b;stroke-width:1.5}.vz-end{fill:#f9e3e1;stroke:#b3261e;stroke-width:1.5}"
-    ".vz-text{fill:#0e1b2b;font:500 13px system-ui,-apple-system,'Segoe UI',sans-serif}.vz-small{fill:#4a5260;font:11.5px system-ui,sans-serif}"
-    ".vz-edge{stroke:#5d6572;stroke-width:1.5;fill:none}.vz-arrow{fill:#5d6572}.vz-axis{stroke:#5d6572;stroke-width:1.2;fill:none}"
-    ".vz-grid{stroke:#d9dde6;stroke-width:1}.vz-line{stroke:#4b5b8a;stroke-width:2.2;fill:none}.vz-head{fill:#dfe5f5;stroke:#4b5b8a;stroke-width:1.5}"
-    ".vz-bg{fill:#ffffff}.vz-label-bg{fill:#ffffff;opacity:.85}"
-    "@media (prefers-color-scheme: dark){"
-    ".vz-node{fill:#232a3d;stroke:#8b9bd0}.vz-hl{fill:#4a3a1f;stroke:#e6a050}.vz-start{fill:#1f3a2c;stroke:#5cc98f}.vz-end{fill:#40201e;stroke:#ff8a80}"
-    ".vz-text{fill:#f1efe9}.vz-small{fill:#aab0bb}.vz-edge{stroke:#9aa0aa}.vz-arrow{fill:#9aa0aa}.vz-axis{stroke:#9aa0aa}"
-    ".vz-grid{stroke:#2e3340}.vz-line{stroke:#8b9bd0}.vz-head{fill:#2b3350;stroke:#8b9bd0}.vz-bg{fill:#14161a}.vz-label-bg{fill:#14161a}}"
-    "</style>"
-)
+# Colours come from the page's theme tokens (--vz-*), so a theme switch restyles diagrams instantly. The fallbacks make the SVG
+# look right on its own too: light by default, dark under prefers-color-scheme.
+LIGHT = {"node-fill": "#eef1fa", "node-stroke": "#4b5b8a", "hl-fill": "#fde9c8", "hl-stroke": "#c4561d", "start-fill": "#e3f2ea",
+         "start-stroke": "#2e7d5b", "end-fill": "#f9e3e1", "end-stroke": "#b3261e", "text": "#0e1b2b", "small": "#4a5260", "edge": "#5d6572",
+         "grid": "#d9dde6", "line": "#4b5b8a", "head-fill": "#dfe5f5", "bg": "#ffffff"}
+DARK = {"node-fill": "#232a3d", "node-stroke": "#8b9bd0", "hl-fill": "#4a3a1f", "hl-stroke": "#e6a050", "start-fill": "#1f3a2c",
+        "start-stroke": "#5cc98f", "end-fill": "#40201e", "end-stroke": "#ff8a80", "text": "#f1efe9", "small": "#aab0bb", "edge": "#9aa0aa",
+        "grid": "#2e3340", "line": "#8b9bd0", "head-fill": "#2b3350", "bg": "#14161a"}
+
+
+def _rules(pal: dict) -> str:
+    v = lambda k: f"var(--vz-{k},{pal[k]})"  # noqa: E731
+    return (f".vz-node{{fill:{v('node-fill')};stroke:{v('node-stroke')};stroke-width:1.5}}.vz-hl{{fill:{v('hl-fill')};stroke:{v('hl-stroke')};stroke-width:1.8}}"
+            f".vz-start{{fill:{v('start-fill')};stroke:{v('start-stroke')};stroke-width:1.5}}.vz-end{{fill:{v('end-fill')};stroke:{v('end-stroke')};stroke-width:1.5}}"
+            f".vz-text{{fill:{v('text')};font:500 13px system-ui,-apple-system,'Segoe UI',sans-serif}}.vz-small{{fill:{v('small')};font:11.5px system-ui,sans-serif}}"
+            f".vz-edge{{stroke:{v('edge')};stroke-width:1.5;fill:none}}.vz-arrow{{fill:{v('edge')}}}.vz-axis{{stroke:{v('edge')};stroke-width:1.2;fill:none}}"
+            f".vz-grid{{stroke:{v('grid')};stroke-width:1}}.vz-line{{stroke:{v('line')};stroke-width:2.2;fill:none}}"
+            f".vz-head{{fill:{v('head-fill')};stroke:{v('node-stroke')};stroke-width:1.5}}.vz-bg{{fill:{v('bg')}}}.vz-label-bg{{fill:{v('bg')};opacity:.85}}")
+
+
+STYLE = f"<style>{_rules(LIGHT)}@media (prefers-color-scheme: dark){{{_rules(DARK)}}}</style>"
 DEFS = ('<defs><marker id="vz-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
         '<path d="M0 0L10 5L0 10z" class="vz-arrow"/></marker></defs>')
 CHAR_W, LINE_H = 7.3, 16

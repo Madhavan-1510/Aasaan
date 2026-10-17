@@ -6,6 +6,13 @@ export const store = {
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
+// Theme: "system" (no attribute: the OS decides), "light" or "dark". The inline script in index.html applies it before first paint.
+export const themePref = () => { const t = store.get("aasaan_theme"); return t === "light" || t === "dark" ? t : "system"; };
+export function setTheme(pref) {
+  store.set("aasaan_theme", pref);
+  if (pref === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", pref);
+}
+
 export const LANGS = { en: "English", hi: "हिन्दी", kn: "ಕನ್ನಡ", ta: "தமிழ்", te: "తెలుగు", ml: "മലയാളം", bn: "বাংলা", mr: "मराठी" };
 export const lang = () => store.get("lang") || "en";
 

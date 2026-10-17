@@ -474,6 +474,12 @@ class Engine:
             if b["type"] == "quiz":  # answer keys and hints stay on the server until the student answers
                 content = {"questions": [{"id": q["id"], "text": q["text"], "options": q["options"], "concept": q["concept"]}
                                          for q in content["questions"]]}
+            if b["type"] == "visual" and (content.get("payload") or {}).get("spec"):   # draw with the current renderer (theme tokens)
+                try:
+                    from .visuals import render, specs
+                    content = {**content, "payload": {**content["payload"], "svg": render.render(specs.parse_spec(content["payload"]["spec"])).svg}}
+                except Exception as e:  # noqa: BLE001  keep the stored drawing if it can't be redrawn
+                    log.warning("[aasaan] could not redraw visual block %s: %s", b["id"], e)
             out_blocks.append({"id": b["id"], "type": b["type"], "content": content, "verified": b["verified"], "meta": b["meta"]})
         meta = ch["meta"]
         return {"id": cid, "notebook_id": nb["id"], "title": ch["title"], "summary": ch["summary"], "objectives": ch["objectives"],

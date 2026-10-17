@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aasaan</title>
   <meta name="description" content="Aasaan builds a complete notebook course for any goal. Learning made aasaan.">
+  <script>
+    // Set the theme before first paint (no flash). "system" = no attribute: the OS setting decides.
+    try { var t = localStorage.getItem("aasaan_theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
