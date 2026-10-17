@@ -1,5 +1,6 @@
 // Aasaan UI: Home -> Loading -> Notebook (roadmap + graph + chapter page). The agents are never shown.
-import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, themePref, setTheme, avatarImg, MASCOT } from "./util.js";
+import { esc, store, LANGS, lang, api, ICON, timeAgo, speak, startRecording, themePref, setTheme } from "./util.js";
+import { logoSvg, mountHero } from "./pixel-mascot.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderGraph, legend } from "./graph.js";
 import { createChat } from "./chat.js";
@@ -23,13 +24,14 @@ function toast(msg) {
 const fail = (e) => toast(e.message || String(e));
 
 function cleanup() {
+  if (S.hero) { S.hero.destroy(); S.hero = null; }
   clearInterval(S.poll); S.poll = null;
   if (S.es) { S.es.close(); S.es = null; }
 }
 
 function topbar(right = "") {
   $bar.innerHTML = `${S.modelReady === false ? `<div class="demo" role="alert">No AI model is connected. Add GEMINI_API_KEY to the .env file and restart the server to build notebooks.</div>` : ""}
-    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home">${avatarImg("brand-av")}<span class="wordmark" aria-hidden="true"><span class="wm wm-en">Aasaan</span><span class="wm wm-ta" lang="ta">ஆசான்</span></span></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
+    <div class="bar"><a class="brand" href="#/" aria-label="Aasaan home"><img class="brand-img" src="/static/mascot/aasaan-avatar.png" alt="" width="32" height="32"><span class="wordmark" aria-label="Aasaan, ஆசான், आसान"><span class="wm" lang="en">Aasaan</span><span class="wm-sep" aria-hidden="true">|</span><span class="wm" lang="ta">ஆசான்</span><span class="wm-sep" aria-hidden="true">|</span><span class="wm" lang="hi">आसान</span></span></a><div class="bar-right">${right}${themeSwitch()}</div></div>`;
   const tgl = $bar.querySelector("#themetoggle");
   if (tgl) tgl.onclick = () => { const dark = themePref() !== "dark"; setTheme(dark ? "dark" : "light"); tgl.setAttribute("aria-checked", String(dark)); };
 }
@@ -66,7 +68,7 @@ async function home() {
   $app.className = "";
   let nbs = [];
   try { nbs = await api("notebooks?learner_id=" + S.learner); } catch { /* none yet */ }
-  $app.innerHTML = `<div class="hero"><img class="hero-mascot" src="${MASCOT}" alt="Aasaan, your teacher" width="96"><h1>What do you want to learn today?</h1><p>Learning made aasaan. Type a goal, paste notes or links, or attach a photo or PDF.</p></div>
+  $app.innerHTML = `<div class="hero"><div class="hero-mascot" id="heromascot"></div><h1>What do you want to learn today?</h1><p>Learning made aasaan. Type a goal, paste notes or links, or attach a photo or PDF.</p></div>
     <div class="composer" id="chat">
       <div class="att-row" id="atts"></div>
       <textarea id="msg" rows="1" placeholder="${PLACEHOLDERS[0]}" aria-label="Your goal, notes or links"></textarea>
@@ -107,6 +109,8 @@ function nbCard(n) {
 const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
 
 function wireComposer() {
+  const hm = document.getElementById("heromascot");
+  if (hm) S.hero = mountHero(hm);
   const msg = document.getElementById("msg"), send = document.getElementById("send"), box = document.getElementById("chat");
   const file = document.getElementById("file"), menu = document.getElementById("langmenu"), mic = document.getElementById("mic");
   const sync = () => {
@@ -195,7 +199,7 @@ async function workspace(nid, cid) {
     </section>
     <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize the chat panel" tabindex="0" aria-valuemin="30" aria-valuemax="80" aria-valuenow="${prefs.w}"></div>
     <aside class="chatpane" id="chatpane" aria-label="Chat with Aasaan">
-      <header class="chat-h"><span class="chat-name">${avatarImg("head-av")} Aasaan</span>
+      <header class="chat-h"><span class="chat-name">${logoSvg("head-logo")} Aasaan</span>
         <button class="iconbtn" id="dissolve" aria-label="Hide chat" aria-keyshortcuts="Control+." title="Hide chat (Ctrl+.)">${ICON.right}</button></header>
       <div class="msgs" id="msgs" role="log" aria-live="polite" aria-label="Conversation"></div>
       <button class="jump" id="jump" type="button" hidden>New messages ↓</button>

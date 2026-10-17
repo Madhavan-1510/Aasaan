@@ -112,13 +112,17 @@ def test_every_notebook_gets_one_of_the_four_thumbnails_and_it_never_changes(eng
     assert engine.list_notebooks("L1")[0]["cover"] == first
 
 
-def test_mascot_files_exist_are_transparent_and_are_used_by_the_ui():
+def test_mascot_assets_exist():
+    import json
     from pathlib import Path
     from PIL import Image
     fe = Path(__file__).resolve().parents[2] / "frontend"
-    for name in ("aasaan-mascot.png", "aasaan-avatar.png"):
-        im = Image.open(fe / "mascot" / name)
-        assert im.mode == "RGBA" and im.getpixel((2, 2))[3] == 0, name          # transparent corners: it sits on both themes
-    js = (fe / "util.js").read_text(encoding="utf-8") + (fe / "chat.js").read_text(encoding="utf-8")
-    assert "mascot/aasaan-avatar.png" in js and "mascot/aasaan-mascot.png" in js
-    assert "mascot/aasaan-avatar.png" in (fe / "index.html").read_text(encoding="utf-8")   # favicon
+    rows = json.loads((fe / "mascot" / "pixel-mascot-rows.json").read_text(encoding="utf-8"))["rows"]
+    assert len(rows) == 48 and all(len(r) == 48 for r in rows)
+    for size in (32, 64):
+        im = Image.open(fe / "mascot" / f"favicon-{size}.png")
+        assert im.size == (size, size) and im.mode == "RGBA" and im.getpixel((0, 0))[3] == 0     # transparent: sits on any tab colour
+    assert (fe / "mascot" / "aasaan-avatar.png").exists()                       # the header logo is this image itself
+    js = "".join((fe / n).read_text(encoding="utf-8") for n in ("app.js", "chat.js", "util.js"))
+    assert "mascot/aasaan-avatar.png" in js and "mountHero" in js and "logoSvg" in js
+    assert "favicon-32.png" in (fe / "index.html").read_text(encoding="utf-8")

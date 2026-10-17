@@ -1,0 +1,420 @@
+{
+ "label": "old",
+ "summary": {
+  "topics": 5,
+  "chapters_built": 8,
+  "chapters_ready": 8,
+  "chapters_failed": 0,
+  "shipped_unverified_rate": 0.0,
+  "avg_build_s": 95.3,
+  "avg_fallback_rate": 0.36,
+  "avg_claims_supported": 0.17,
+  "avg_sentence_words": 11.9,
+  "avg_longest_paragraph_words": 73.0,
+  "avg_reading_minutes": 1.31,
+  "tables_on_one_line": 0,
+  "title_repeated_as_heading": 0,
+  "avg_outline_s": 27.4
+ },
+ "topics": [
+  {
+   "topic": "cloud-de-pdf",
+   "notebook_id": "nb_59e631a6a5",
+   "chapters": [],
+   "error": "outline failed: AttributeError: 'list' object has no attribute 'get'"
+  },
+  {
+   "topic": "binary-search",
+   "notebook_id": "nb_5dd1686e6b",
+   "chapters": [
+    {
+     "position": 1,
+     "title": "Introduction to Searching",
+     "build_s": 81.9,
+     "events": 32,
+     "retry_fallback_failed": 11,
+     "fallback_rate": 0.34,
+     "worst_agents": {
+      "illustrator": 5,
+      "illustrator_faithful": 4,
+      "critic": 2
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 3,
+      "slides": 1,
+      "video": 2,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 295,
+      "sentences": 27,
+      "avg_sentence_words": 10.6,
+      "longest_paragraph_words": 55,
+      "reading_minutes": 1.5,
+      "headings": 4,
+      "bullet_share": 0.47,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    },
+    {
+     "position": 2,
+     "title": "The Importance of Sorted Data",
+     "build_s": 115.2,
+     "events": 28,
+     "retry_fallback_failed": 7,
+     "fallback_rate": 0.25,
+     "worst_agents": {
+      "illustrator_faithful": 4,
+      "critic": 2,
+      "teacher": 1
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 3,
+      "slides": 1,
+      "video": 2,
+      "image": 1,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 294,
+      "sentences": 23,
+      "avg_sentence_words": 12.5,
+      "longest_paragraph_words": 66,
+      "reading_minutes": 1.5,
+      "headings": 4,
+      "bullet_share": 0.27,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    }
+   ],
+   "outline_s": 22.9,
+   "outline_events": {
+    "events": 4,
+    "retry_fallback_failed": 2,
+    "fallback_rate": 0.5,
+    "worst_agents": {
+     "architect": 2
+    }
+   },
+   "outline_chapters": 8,
+   "total_s": 220.9
+  },
+  {
+   "topic": "photosynthesis",
+   "notebook_id": "nb_1db3a32d4d",
+   "chapters": [
+    {
+     "position": 1,
+     "title": "Introduction to Plant Biology",
+     "build_s": 69.8,
+     "events": 31,
+     "retry_fallback_failed": 9,
+     "fallback_rate": 0.29,
+     "worst_agents": {
+      "illustrator": 6,
+      "critic": 2,
+      "teacher": 1
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 2,
+      "slides": 1,
+      "video": 2,
+      "image": 1,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 243,
+      "sentences": 21,
+      "avg_sentence_words": 11.4,
+      "longest_paragraph_words": 62,
+      "reading_minutes": 1.2,
+      "headings": 5,
+      "bullet_share": 0.2,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    },
+    {
+     "position": 2,
+     "title": "The Role of Chloroplasts",
+     "build_s": 60.0,
+     "events": 26,
+     "retry_fallback_failed": 9,
+     "fallback_rate": 0.35,
+     "worst_agents": {
+      "illustrator": 6,
+      "critic": 2,
+      "teacher": 1
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "slides": 1,
+      "video": 2,
+      "image": 2,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 231,
+      "sentences": 20,
+      "avg_sentence_words": 11.3,
+      "longest_paragraph_words": 60,
+      "reading_minutes": 1.2,
+      "headings": 3,
+      "bullet_share": 0.2,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    }
+   ],
+   "outline_s": 17.2,
+   "outline_events": {
+    "events": 4,
+    "retry_fallback_failed": 2,
+    "fallback_rate": 0.5,
+    "worst_agents": {
+     "architect": 2
+    }
+   },
+   "outline_chapters": 6,
+   "total_s": 147.9
+  },
+  {
+   "topic": "french-revolution",
+   "notebook_id": "nb_a53c18a6aa",
+   "chapters": [
+    {
+     "position": 1,
+     "title": "The Ancien R\u00e9gime",
+     "build_s": 123.9,
+     "events": 36,
+     "retry_fallback_failed": 11,
+     "fallback_rate": 0.31,
+     "worst_agents": {
+      "illustrator": 5,
+      "illustrator_faithful": 4,
+      "critic": 2
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 2,
+      "slides": 1,
+      "video": 2,
+      "image": 3,
+      "link": 2,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 245,
+      "sentences": 17,
+      "avg_sentence_words": 14.3,
+      "longest_paragraph_words": 68,
+      "reading_minutes": 1.2,
+      "headings": 3,
+      "bullet_share": 0.0,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "flagged": 10,
+      "supported_share": 0.17
+     }
+    },
+    {
+     "position": 2,
+     "title": "Economic Crisis and Enlightenment Ideas",
+     "build_s": 88.2,
+     "events": 28,
+     "retry_fallback_failed": 13,
+     "fallback_rate": 0.46,
+     "worst_agents": {
+      "illustrator": 7,
+      "quizzer": 4,
+      "critic": 2
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 1,
+      "slides": 1,
+      "video": 2,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 273,
+      "sentences": 21,
+      "avg_sentence_words": 12.7,
+      "longest_paragraph_words": 78,
+      "reading_minutes": 1.4,
+      "headings": 3,
+      "bullet_share": 0.27,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    }
+   ],
+   "outline_s": 23.1,
+   "outline_events": {
+    "events": 4,
+    "retry_fallback_failed": 2,
+    "fallback_rate": 0.5,
+    "worst_agents": {
+     "architect": 2
+    }
+   },
+   "outline_chapters": 8,
+   "total_s": 237.0
+  },
+  {
+   "topic": "sql-joins",
+   "notebook_id": "nb_1c080448c2",
+   "chapters": [
+    {
+     "position": 1,
+     "title": "Relational Database Basics",
+     "build_s": 74.5,
+     "events": 35,
+     "retry_fallback_failed": 14,
+     "fallback_rate": 0.4,
+     "worst_agents": {
+      "illustrator_faithful": 4,
+      "illustrator": 4,
+      "curator_gate": 4
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 3,
+      "slides": 1,
+      "video": 2,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 281,
+      "sentences": 20,
+      "avg_sentence_words": 12.7,
+      "longest_paragraph_words": 156,
+      "reading_minutes": 1.4,
+      "headings": 3,
+      "bullet_share": 0.15,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    },
+    {
+     "position": 2,
+     "title": "Introduction to Joins",
+     "build_s": 148.9,
+     "events": 39,
+     "retry_fallback_failed": 18,
+     "fallback_rate": 0.46,
+     "worst_agents": {
+      "teacher": 5,
+      "illustrator_faithful": 4,
+      "video_marker": 4
+     },
+     "status": "ready",
+     "unverified": false,
+     "revisions": 0,
+     "blocks": {
+      "notes": 1,
+      "visual": 3,
+      "slides": 1,
+      "video": 2,
+      "image": 1,
+      "quiz": 1,
+      "summary": 1
+     },
+     "readability": {
+      "words": 217,
+      "sentences": 18,
+      "avg_sentence_words": 9.7,
+      "longest_paragraph_words": 39,
+      "reading_minutes": 1.1,
+      "headings": 3,
+      "bullet_share": 0.11,
+      "table_on_one_line": false,
+      "repeats_title_heading": false
+     },
+     "claims": {
+      "claims": 12,
+      "supported_share": null,
+      "note": "no sources"
+     }
+    }
+   ],
+   "outline_s": 46.4,
+   "outline_events": {
+    "events": 5,
+    "retry_fallback_failed": 3,
+    "fallback_rate": 0.6,
+    "worst_agents": {
+     "architect": 3
+    }
+   },
+   "outline_chapters": 8,
+   "total_s": 270.6
+  }
+ ]
+}

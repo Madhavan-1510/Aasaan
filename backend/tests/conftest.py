@@ -119,3 +119,11 @@ def engine(store, router, tmp_path):
 @pytest.fixture
 def worker(engine):
     return Worker(engine)
+
+
+def pytest_collection_modifyitems(items):
+    """Marks are applied by code so no test file needs editing: anything using the worker, or the HTTP flow module, is slow + integration."""
+    for item in items:
+        if "worker" in item.fixturenames or item.module.__name__.endswith("test_worker_api"):
+            item.add_marker(pytest.mark.slow)
+            item.add_marker(pytest.mark.integration)

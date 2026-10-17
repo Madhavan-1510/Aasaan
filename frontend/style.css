@@ -6,6 +6,7 @@
   --bg: #faf8f3; --card: #ffffff; --line: #e7e1d6; --fg: #1f1b16; --muted: #6b645a;
   --primary: #1f1b16; --primary-fg: #faf8f3; --blue: #8fa6d9; --blue-soft: #f0ece2;
   --accent: #f0b23e; --accent-fg: #1f1b16;
+  --mascot-ink: #111111; --mascot-fill: #ffffff; --mascot-shadow: rgba(0,0,0,.22);
   --ok: #1f7a52; --bad: #b3261e; --warn: #a8480f; --amber: #f0b23e; --amber-ink: #7a5200;
   --shadow: 0 1px 2px rgba(31,27,22,.05), 0 8px 24px rgba(31,27,22,.07);
   /* diagrams (Illustrator SVG) */
@@ -21,6 +22,7 @@
   --bg: #14161a; --card: #1c1f25; --line: #2c3038; --fg: #f1efe9; --muted: #9aa0aa;
   --primary: #f1efe9; --primary-fg: #14161a; --blue: #4a5f94; --blue-soft: #232a3d;
   --accent: #e6b450; --accent-fg: #1a1205;
+  --mascot-ink: #f4efe6; --mascot-fill: #1b1712; --mascot-shadow: rgba(0,0,0,.5);
   --ok: #5cc98f; --bad: #ff8a80; --warn: #ffa270; --amber: #e6b450; --amber-ink: #f3cf8a;
   --shadow: 0 8px 24px rgba(0,0,0,.35);
   --vz-node-fill: #232a3d; --vz-node-stroke: #8b9bd0; --vz-hl-fill: #4a3a1f; --vz-hl-stroke: #e6a050;
@@ -365,8 +367,8 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 .msgrow.me { justify-content: flex-end; }
 .msgcol { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 88%; }
 .msgrow.me .msgcol { align-items: flex-end; }
-.pul { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; margin-top: 2px; }
-.pul svg { width: 15px; height: 15px; }
+
+
 .msg { padding: 9px 13px; border-radius: 14px; font-size: .95rem; line-height: 1.5; overflow-wrap: anywhere; max-width: 100%; }
 .msg.user { background: var(--primary); color: var(--primary-fg); border-bottom-right-radius: 4px; }
 .msg.bot { background: var(--blue-soft); color: var(--fg); border-bottom-left-radius: 4px; }
@@ -481,7 +483,7 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 @media (max-width: 860px) { .board-top { display: none; } .jump { bottom: 190px; } }
 
 .chat-empty { margin: auto; text-align: center; color: var(--muted); max-width: 240px; display: grid; justify-items: center; gap: 10px; font-size: .92rem; animation: msgin .4s ease; }
-.chat-empty .pul { width: 36px; height: 36px; } .chat-empty .pul svg { width: 20px; height: 20px; } .chat-empty p { margin: 0; }
+.chat-empty-mark { display: block; } .chat-empty p { margin: 0; }
 
 /* notebook thumbnails (frontend/resources/thumb0N.jpg) with the title over a soft scrim, readable on all four images */
 .cover, .nb-thumb { position: relative; overflow: hidden; background: var(--blue-soft); }
@@ -500,28 +502,44 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 .nbhead .cover .cover-scrim { background: linear-gradient(to top, rgba(10,10,14,.22), transparent 55%); }
 @media (max-width: 860px) { .nbhead { grid-template-columns: 1fr; } }
 
-/* the mascot */
-.mascot-av { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
-.pul { overflow: hidden; background: var(--accent); width: 30px; height: 30px; border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent); }
-.brand .brand-av { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); align-self: center; flex: none; }
-.chat-name .head-av { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); flex: none; }
-.hero-mascot { display: block; height: 116px; width: auto; margin: 0 auto 6px; filter: drop-shadow(0 6px 10px rgba(0,0,0,.14)); animation: mascotin .6s cubic-bezier(.2,.8,.2,1); }
-:root[data-theme="dark"] .hero-mascot, :root[data-theme="dark"] .mascot-full { filter: drop-shadow(0 4px 10px rgba(0,0,0,.5)); }
-.mascot-full { display: block; height: 150px; width: auto; }
-.chat-empty .pul { display: none; }
-.hero { margin-top: 5vh; }
-@keyframes mascotin { from { opacity: 0; transform: translateY(10px) scale(.96); } }
-@media (prefers-reduced-motion: reduce) { .hero-mascot { animation: none; } }
+/* wordmark: Aasaan | ஆசான் | आसान, always all three, no animation */
+.wordmark { display: flex; align-items: baseline; gap: 9px; white-space: nowrap; }
+.wordmark .wm { font-family: var(--serif); line-height: 1.1; font-size: 1.3rem; }
+.wm-sep { color: var(--muted); font-weight: 300; opacity: .7; }
+@media (max-width: 420px) { .wordmark { gap: 6px; } .wordmark .wm { font-size: 1.05rem; } }
 
-/* wordmark: English for 5 s, then Tamil for 5 s, and round again (English only with reduced motion) */
-.wordmark { display: grid; align-items: baseline; }
-.wordmark .wm { grid-area: 1 / 1; font-family: var(--serif); line-height: 1.1; white-space: nowrap; }
-.wm-ta { font-size: 1.28rem; opacity: 0; }
-.wm-en { animation: wmEn 10s infinite ease-in-out; } .wm-ta { animation: wmTa 10s infinite ease-in-out; }
-@keyframes wmEn { 0%, 46% { opacity: 1; transform: none; } 50%, 96% { opacity: 0; transform: translateY(-5px); } 100% { opacity: 1; transform: none; } }
-@keyframes wmTa { 0%, 46% { opacity: 0; transform: translateY(5px); } 50%, 96% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(5px); } }
-@media (prefers-reduced-motion: reduce) { .wm-en { animation: none; opacity: 1; } .wm-ta { display: none; } }
-/* mascot circle: dark warm circle in light mode so the pale sketch stands out; amber in dark mode */
-:root { --av-bg: #2b2620; --av-ring: var(--accent); }
-:root[data-theme="dark"] { --av-bg: var(--accent); --av-ring: transparent; }
-.pul, .brand .brand-av, .chat-name .head-av { background: var(--av-bg); box-shadow: 0 0 0 2px var(--av-ring); border: 0; }
+/* pixel mascot: header/chat mark (static SVG, no frame) and the animated hero sticker */
+.pm-logo { display: block; height: 28px; width: auto; aspect-ratio: 27 / 45; flex: none; align-self: center; }
+.pul { flex: none; width: 20px; height: 32px; display: grid; place-items: start center; margin-top: 2px; }
+.pul .pm-logo { height: 26px; }
+.chat-name { display: inline-flex; align-items: center; gap: 8px; } .chat-name .pm-logo { height: 22px; }
+.chat-empty-mark .pm-logo.big { height: 96px; }
+.hero { margin-top: 5vh; position: relative; z-index: 1; }
+.brand-img { display: block; height: 34px; width: 34px; object-fit: contain; align-self: center; flex: none; }
+/* the hero mascot sits in the empty space to the right of the centred headline and box on wide screens, above them on small ones */
+.hero-mascot { position: relative; width: 192px; height: 192px; margin: 0 auto 4px; }
+@media (max-width: 479px) { .hero-mascot { width: 144px; height: 144px; } }
+@media (min-width: 1250px) {
+  .hero-mascot { position: absolute; left: calc(100% + 40px); top: -2vh; margin: 0; }
+}
+.pm-hero canvas { position: absolute; inset: 0; image-rendering: pixelated; }
+.pm-fig { cursor: pointer; touch-action: manipulation; }   /* the figure stays put: it assembles on load and ripples on click, it does not bob */
+.pm-shadow { pointer-events: none; }
+.pm-paused canvas { animation-play-state: paused; }
+.pm-still canvas { animation: none; }
+@media (prefers-reduced-motion: reduce) { .pm-hero canvas { animation: none; } }
+
+/* small screens: the three-script wordmark and the header actions must fit on one line; tap targets reach 36 px */
+@media (max-width: 520px) {
+  .wordmark { gap: 5px; } .wordmark .wm { font-size: .92rem; }
+  .brand { gap: 5px; } .brand-img { height: 28px; width: 28px; }
+  .bar-right #finish { font-size: .74rem; white-space: nowrap; }
+}
+@media (max-width: 860px) {
+  .pill, .askbtn, .x2 { min-height: 36px; }
+  .x2 { min-width: 36px; }
+}
+@media (max-width: 380px) { .wordmark .wm { font-size: .8rem; } .wordmark { gap: 4px; } .bar-right { gap: 4px; } .bar-right #finish { font-size: .68rem; } }
+
+/* header logo: the avatar inside a plain circle (neutral ink border, theme-aware surface, no yellow) */
+.brand-img { border-radius: 50%; border: 1.5px solid var(--fg); background: var(--card); padding: 1px; box-sizing: border-box; object-fit: cover; }

@@ -1,7 +1,8 @@
 // Chat panel for a notebook: persistent thread (SQLite), code-written progress narration, streamed answers with source chips,
 // attachments with upload progress, "Ask about this" context, unread dot. The thread is delivered by cursor (messages?after=id),
 // so a dropped stream or a reload never loses a message.
-import { esc, ICON, avatarImg, MASCOT } from "./util.js";
+import { esc, ICON } from "./util.js";
+import { logoSvg } from "./pixel-mascot.js";
 
 const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
 const STATUS = { reading: "Reading…", ready: "Read", partly_readable: "Partly readable", unreadable: "Couldn't read" };
@@ -61,11 +62,11 @@ export function createChat(ctx) {
     row.dataset.id = m.id || "";
     if (m.kind === "proposal" && m.proposal) {   // an edit suggestion: a card, never a silent change
       row.className = "msgrow bot";
-      row.innerHTML = `<span class="pul" aria-hidden="true">${avatarImg()}</span><div class="msgcol">${cardHtml(m.proposal)}</div>`;
+      row.innerHTML = `<span class="pul" aria-hidden="true">${logoSvg()}</span><div class="msgcol">${cardHtml(m.proposal)}</div>`;
       st.cards.set(m.proposal.id, m.proposal); wireCard(row, m.proposal);
       return row;
     }
-    const avatar = m.role === "user" || m.kind === "system" ? "" : `<span class="pul" aria-hidden="true">${avatarImg()}</span>`;
+    const avatar = m.role === "user" || m.kind === "system" ? "" : `<span class="pul" aria-hidden="true">${logoSvg()}</span>`;
     if (m.created_at) row.title = clock(m.created_at);
     row.innerHTML = `${avatar}<div class="msgcol"><div class="msg ${m.role === "user" ? "user" : m.kind === "system" ? "sys" : "bot"}">${esc(m.content).replace(/\n/g, "<br>")}${m.role === "user" ? attHtml(m.attachments) : ""}</div>${chipsHtml(m.refs)}</div>`;
     row.querySelectorAll(".srcchip").forEach((b) => b.onclick = () => ctx.onChip(m.refs[Number(b.dataset.chip)]));
@@ -95,7 +96,7 @@ export function createChat(ctx) {
     const box = document.getElementById("suggest"); if (!box) return;
     const empty = el.msgs.querySelector(".chat-empty");
     if (el.msgs.querySelector(".msgrow")) empty?.remove();
-    else if (!empty && st.loaded) el.msgs.insertAdjacentHTML("beforeend", `<div class="chat-empty"><img class="mascot-full" src="${MASCOT}" alt="Aasaan, your teacher" width="110"><p>Ask me anything about this notebook, add a file or link, or ask me to change the course.</p></div>`);
+    else if (!empty && st.loaded) el.msgs.insertAdjacentHTML("beforeend", `<div class="chat-empty"><span class="chat-empty-mark">${logoSvg("big")}</span><p>Ask me anything about this notebook, add a file or link, or ask me to change the course.</p></div>`);
     if (st.hasUser || st.busy) { box.innerHTML = ""; return; }
     if (box.childElementCount) return;
     box.innerHTML = SUGGEST.map(([label], i) => `<button type="button" class="sugg" data-i="${i}">${esc(label)}</button>`).join("");
