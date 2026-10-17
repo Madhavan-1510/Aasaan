@@ -42,7 +42,7 @@ def _jev_diagnose(router: ModelRouter, q: Question, student_answer: str, known_l
         "misconception": choice("Which misconception best explains the student's wrong answer?", options),
         "completeness": score("How complete is the student's understanding shown by the answer?",
                               ["Not at all", "Partly", "Fully"]),
-    }, summary=f"Jev diagnose {q.id}")
+    }, summary=f"diagnose {q.id}", student_data=True)  # the student's answer: never sent to the free-tier decision model
     if not answers:
         return None
     try:

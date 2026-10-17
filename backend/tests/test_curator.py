@@ -15,6 +15,7 @@ def cands(*urls):
 
 @pytest.fixture
 def live(store, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")  # a decision provider is configured; its HTTP call is patched per test
     return ModelRouter(store=store, mode="live")
 
 
@@ -22,7 +23,7 @@ def test_jev_gate_is_one_batched_call_keeping_probable_yes(live, monkeypatch):
     seen = {}
 
     def fake(model, state, questions, timeout_s=15):
-        seen.update(state=state, questions=questions, n=seen.get("n", 0) + 1)
+        seen.update(state=state, questions=dict(questions), n=seen.get("n", 0) + 1)  # copy: the router mutates its dict afterwards
         return {"l0": {"type": "noul", "noul": 0.92}, "l1": {"type": "noul", "noul": 0.31}, "l2": {"type": "noul", "noul": 0.6}}
 
     monkeypatch.setattr(live.jev, "systemone", fake)

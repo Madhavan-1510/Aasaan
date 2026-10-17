@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from .base import Provider, ProviderError, ProviderNotConfigured
+from .base import Provider, ProviderError, ProviderNotConfigured, ProviderTimeout
 
 
 def noul(instructions: str, true: str = "", false: str = "") -> dict:
@@ -34,9 +34,12 @@ def score(instructions: str, levels: list[str]) -> dict:
 class TypeSafeClient:
     name = "typesafe"
 
-    def __init__(self, api_key_env: str = "TYPESAFE_API_KEY", base_url: str = "https://api.typesafe.ai"):
+    def __init__(self, api_key_env: str = "TYPESAFE_API_KEY", base_url: str = "https://api.typesafe.ai", path: str = "/v1/systemone"):
+        # The same System One request/response schema is served by TypeSafe (api.typesafe.ai/v1/systemone) and by OpenRouter
+        # (openrouter.ai/api/v1/systemone) for jev-1.13 and inception/mercury-decide:free (verified with live probes).
         self.api_key_env = api_key_env
         self.base_url = base_url.rstrip("/")
+        self.path = path
 
     def systemone(self, model_id: str, state: Any, questions: dict[str, dict], timeout_s: float = 15) -> dict:
         key = os.environ.get(self.api_key_env)
@@ -44,10 +47,12 @@ class TypeSafeClient:
             raise ProviderNotConfigured(f"{self.api_key_env} is not set")
         body = {"state": state, "model": model_id, "questions": questions}
         try:
-            r = httpx.post(f"{self.base_url}/v1/systemone", headers={"Authorization": f"Bearer {key}"},
+            r = httpx.post(f"{self.base_url}{self.path}", headers={"Authorization": f"Bearer {key}"},
                            json=body, timeout=timeout_s)
+        except httpx.TimeoutException as e:
+            raise ProviderTimeout(f"decision call timed out after {timeout_s}s") from e
         except httpx.HTTPError as e:
-            raise ProviderError(f"jev transport error: {type(e).__name__}: {e}") from e
+            raise ProviderError(f"decision transport error: {type(e).__name__}: {str(e).replace(key, '***')}") from e
         if r.status_code == 401:
             raise ProviderNotConfigured(f"jev rejected the API key (401): {r.text[:200]}")
         if r.status_code != 200:  # 422 bad request, 429 rate limit, 529 overloaded, ...

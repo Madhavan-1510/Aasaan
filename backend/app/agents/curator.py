@@ -73,7 +73,7 @@ def gate(router: ModelRouter, chapter_title: str, objectives: list[str], cands: 
                             f"Directly relevant, accurate, suitable for learning, and in {lang_name} (or clearly language-independent)",
                             f"Off-topic, spam, too advanced, or in a language other than {lang_name}")
                  for c in cands}
-    answers = router.decide("curator", state, questions, summary=f"Jev relevance for '{chapter_title}'")
+    answers = router.decide("curator_gate", state, questions, summary=f"relevance gate for '{chapter_title}'")
     if answers:
         keep = []
         for cid, ans in answers.items():
@@ -126,7 +126,9 @@ def curate(router: ModelRouter, store, chapter_title: str, objectives: list[str]
         log.info("[aasaan] dropped %d off-topic Wikipedia hit(s) for '%s'", len(found["wiki"]) - len(wiki), chapter_title)
     cands = [web.classify(c) for c in found["grounded"] + wiki]
     cands += found["youtube"]
-    if len(cands) < 3:  # too little found: add the curated seed list for this subject
+    if len(cands) < 3:  # too little found: Firecrawl search (capped per notebook), then the curated seed list for this subject
+        cands += [web.classify(c) for c in web.discover_firecrawl(query)]
+    if len(cands) < 3:
         cands += [web.classify(c) for c in web.seed_candidates(_seed_cfg(), f"{chapter_title} {goal}")]
     if not os.environ.get("YOUTUBE_API_KEY") and not live:
         out.notes.append("No YouTube key or Google Search grounding: videos are skipped.")

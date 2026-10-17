@@ -217,7 +217,8 @@ class _Stats:
 
 class ToolRunner:
     def __init__(self, store=None, sink: Optional[EventSink] = None, chaos: Optional[Chaos] = None,
-                 specs: Optional[dict[str, ToolSpec]] = None):
+                 specs: Optional[dict[str, ToolSpec]] = None, rate_scale: float = 1.0):
+        self.rate_scale = rate_scale  # tests use a large value so rate limiting does not slow them down
         self.store = store
         self.sink = sink or EventSink(store)
         self.chaos = chaos or Chaos.from_env()
@@ -251,7 +252,7 @@ class ToolRunner:
             b = self._buckets.get(tool)
             if b is None:
                 sp = self.spec(tool)
-                b = self._buckets[tool] = TokenBucket(sp.rate_per_s, sp.burst)
+                b = self._buckets[tool] = TokenBucket(sp.rate_per_s * self.rate_scale, sp.burst)
             return b
 
     def _st(self, tool: str) -> _Stats:

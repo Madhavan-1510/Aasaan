@@ -109,8 +109,12 @@ class ModelRouter:
         }
         self.sarvam = SarvamClient(p.get("sarvam", {}).get("api_key_env", "SARVAM_API_KEY"),
                                    p.get("sarvam", {}).get("tts_speaker", ""))
-        ts = p.get("typesafe", {})
-        self.jev = TypeSafeClient(ts.get("api_key_env", "TYPESAFE_API_KEY"), ts.get("base_url", "https://api.typesafe.ai"))
+        ts, orc = p.get("typesafe", {}), p.get("openrouter", {})
+        # decision models (typed answers, no generated text). TypeSafe is preferred; the same Jev and Mercury Decide are also on OpenRouter.
+        self.jev = TypeSafeClient(ts.get("api_key_env", "TYPESAFE_API_KEY"), ts.get("base_url", "https://api.typesafe.ai"), "/v1/systemone")
+        self.or_decider = TypeSafeClient(orc.get("api_key_env", "OPENROUTER_API_KEY"), orc.get("base_url", "https://openrouter.ai/api/v1"), "/systemone")
+        self.decision_clients = {"typesafe": self.jev, "openrouter": self.or_decider}
+        self._skip_logged: set[str] = set()
         self.defaults = self.cfg.get("defaults", {})
         self._health_cache: Optional[tuple[float, dict]] = None
         # global limit on concurrent model calls (rate limits); AASAAN_MAX_CALLS overrides the config
@@ -294,30 +298,132 @@ class ModelRouter:
         self._event(run_id, role, "none", len(role_cfg["chain"]), "failed", 0, "fail", label, "all steps failed")
         raise AllFailed(f"{role}: every step in the chain failed")
 
-    # ----------------------------------------------------------- decision model
-    def decide(self, role: str, state: Any, questions: dict[str, dict], summary: str = "") -> Optional[dict]:
-        """Ask Jev several typed questions in ONE call. Returns {question_id: answer} or None when Jev is
-        unavailable (no key, error, mock mode); the caller then continues with the Gemma chain. Always logged."""
-        jev_step = next((s for s in self.cfg["roles"][role]["chain"] if s not in NON_MODEL_STEPS
-                         and self._kind(s) == "decision"), None)
-        if jev_step is None or self.mode == "mock":
-            return None
-        run_id, label = str(uuid.uuid4()), summary or role
-        if jev_step in self.killed:
-            self._event(run_id, role, jev_step, 0, "fallback", 0, "fail", label, "model killed (admin switch)")
-            return None
-        if self.chaos.mode_for("model", jev_step):
-            self._event(run_id, role, jev_step, 0, "fallback", 0, "fail", label, f"chaos: forced {self.chaos.mode_for('model', jev_step)} (AASAAN_CHAOS)")
-            return None
-        timeout = self.cfg["roles"][role].get("timeout_s", self.defaults.get("timeout_s", 30))
-        t0 = time.perf_counter()
+    # ---------------------------------------------------------- decision models
+    NOUL_UNSURE = (0.35, 0.65)   # a yes/no probability in this band means "not sure"
+
+    def _usable_deciders(self, student_data: bool) -> list[str]:
+        """The `decisions` chain minus entries whose key is missing and, for student data, minus free-tier models."""
+        out = []
+        for step in self.cfg["roles"]["decisions"]["chain"]:
+            if step in NON_MODEL_STEPS or step not in self.cfg["models"]:
+                continue
+            mc = self.cfg["models"][step]
+            if mc.get("kind", "chat") == "decision":
+                env = self.cfg["providers"].get(mc["provider"], {}).get("api_key_env")
+                if env and not os.environ.get(env):
+                    if step not in self._skip_logged:  # said once, so a missing key is never invisible but never spams
+                        self._skip_logged.add(step)
+                        self._event(str(uuid.uuid4()), "decisions", step, 0, "fallback", 0, "fail", "decision model skipped", f"{env} is not set")
+                    continue
+                if student_data and mc.get("free_tier"):
+                    continue  # never send student data to a free-tier model whose data handling is unconfirmed
+            out.append(step)
+        return out
+
+    @classmethod
+    def _is_unsure(cls, ans: dict, min_conf: float) -> bool:
+        t = ans.get("type") or ("noul" if "noul" in ans else "choice" if "choice" in ans else "score")
+        if t == "noul":
+            try:
+                return cls.NOUL_UNSURE[0] <= float(ans["noul"]) <= cls.NOUL_UNSURE[1]
+            except (KeyError, TypeError, ValueError):
+                return True
+        conf = ans.get("confidence")
+        return conf is not None and float(conf) < min_conf
+
+    def _decide_with_chat(self, step: str, state: Any, questions: dict[str, dict], timeout: float) -> dict:
+        """Last decision fallback: a Gemma model answers the same typed questions. Output is validated per question."""
+        m = self.cfg["models"][step]
+        provider, model_id = self._provider_for(step)
+        prompt = ("You are a careful classifier. Read the state, then answer EVERY question. Question types: noul = probability 0 to 1 that the answer is "
+                  "yes; choice = pick exactly one key of `criteria`; score = a number from 0 to (number of criteria - 1) on the ordered levels. "
+                  'Reply with ONLY JSON: {"<id>": {"noul": 0.9} | {"choice": "<key>", "confidence": 0.8} | {"score": 1.5, "confidence": 0.7}}.\n\n'
+                  f"State:\n{json.dumps(state, ensure_ascii=False)[:6000]}\n\nQuestions:\n{json.dumps(questions, ensure_ascii=False)}")
+        with self._sem:
+            raw = provider.generate(model_id, prompt, role="decide", timeout_s=timeout, thinking_level=m.get("thinking_level"))
         try:
-            answers = self.jev.systemone(self.cfg["models"][jev_step]["id"], state, questions, timeout)
-        except ProviderError as e:
-            self._event(run_id, role, jev_step, 0, "fallback", int((time.perf_counter() - t0) * 1000), "fail", label, str(e))
+            data = parse_json(raw)
+        except ValueError as e:
+            raise ProviderError(f"decision answer was not JSON: {e}") from e
+        clamp = lambda v, lo=0.0, hi=1.0: max(lo, min(hi, float(v)))  # noqa: E731
+        out: dict = {}
+        for qid, q in questions.items():
+            a = data.get(qid) if isinstance(data, dict) else None
+            if not isinstance(a, dict):
+                continue
+            try:
+                if q["type"] == "noul":
+                    out[qid] = {"type": "noul", "noul": clamp(a["noul"])}
+                elif q["type"] == "choice" and a["choice"] in q["criteria"]:
+                    out[qid] = {"type": "choice", "choice": a["choice"], "confidence": clamp(a.get("confidence", 0.6))}
+                elif q["type"] == "score":
+                    out[qid] = {"type": "score", "score": clamp(a["score"], 0, len(q["criteria"]) - 1), "confidence": clamp(a.get("confidence", 0.6))}
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not out:
+            raise ProviderError("decision model returned no usable answers")
+        return out
+
+    def decide(self, gate: str, state: Any, questions: dict[str, dict], *, student_data: bool = False, summary: str = "",
+               min_confidence: float = 0.5) -> Optional[dict]:
+        """Ask typed questions through the `decisions` chain (Jev, Jev via OpenRouter, Mercury Decide, then Gemma): ONE batched call per
+        provider. A question the provider is unsure about (low confidence) is escalated to the next provider; if nobody is sure the best
+        answer is kept and flagged `"unsure": true`. Returns {question_id: answer} (each tagged `_by`) or None when no provider could answer
+        (the caller then uses its own rule). Every skip, failure and escalation is recorded in `events`. Mock mode returns None."""
+        if self.mode == "mock" or not questions:
             return None
-        self._event(run_id, role, jev_step, 0, "ok", int((time.perf_counter() - t0) * 1000), "pass", label)
-        return answers
+        steps = self._usable_deciders(student_data)
+        timeout = self.cfg["roles"]["decisions"].get("timeout_s", 15)
+        run_id, label = str(uuid.uuid4()), summary or gate
+        remaining, answers, tentative = dict(questions), {}, {}
+        for i, step in enumerate(steps):
+            if not remaining:
+                break
+            if step in self.killed:
+                self._event(run_id, gate, step, i, "fallback", 0, "fail", label, "model killed (admin switch)")
+                continue
+            if self.chaos.mode_for("model", step):
+                self._event(run_id, gate, step, i, "fallback", 0, "fail", label, f"chaos: forced {self.chaos.mode_for('model', step)} (AASAAN_CHAOS)")
+                continue
+            left = self.circuit_open(step)
+            if left > 0:
+                self._event(run_id, gate, step, i, "fallback", 0, "fail", label, f"circuit open: {step} skipped for another {left:.0f}s")
+                continue
+            mc, t0 = self.cfg["models"][step], time.perf_counter()
+            try:
+                if mc.get("kind", "chat") == "decision":
+                    got = self.decision_clients[mc["provider"]].systemone(mc["id"], state, remaining, timeout)
+                else:
+                    got = self._decide_with_chat(step, state, remaining, timeout)
+            except ProviderNotConfigured as e:
+                self._event(run_id, gate, step, i, "fallback", 0, "fail", label, str(e))
+                continue
+            except ProviderError as e:
+                self._record(step, False)
+                self._event(run_id, gate, step, i, "fallback", int((time.perf_counter() - t0) * 1000), "fail", label, str(e))
+                continue
+            self._record(step, True)
+            has_next, unsure = i < len(steps) - 1, []
+            for qid, ans in (got or {}).items():
+                if qid not in remaining:
+                    continue
+                tagged = {**ans, "_by": step}
+                if self._is_unsure(tagged, min_confidence):
+                    if has_next:
+                        tentative[qid] = tagged
+                        unsure.append(qid)
+                        continue
+                    tagged["unsure"] = True  # the last provider is not sure either: keep its answer, but say so
+                answers[qid] = tagged
+                remaining.pop(qid)
+            self._event(run_id, gate, step, i, "ok" if i == 0 else "fallback", int((time.perf_counter() - t0) * 1000), "pass", label,
+                        "" if i == 0 else "answered by a fallback decision provider")
+            if unsure and remaining:
+                self._event(run_id, gate, step, i, "fallback", 0, "pass", label, f"unsure about {', '.join(unsure)[:120]}: escalating to the next provider")
+        for qid in remaining:  # nobody was sure: keep the best answer we have, flagged
+            if qid in tentative:
+                answers[qid] = {**tentative[qid], "unsure": True}
+        return answers or None
 
     # --------------------------------------------------------------- services
     def service(self, name: str, runner: Callable[[str, dict], Any]) -> Any:
@@ -370,7 +476,7 @@ class ModelRouter:
                     if not out.strip():
                         raise ProviderError("empty reply")
                 elif kind == "decision":
-                    self.jev.systemone(m["id"], "ping", {"alive": noul("Is this a short test message?")}, timeout_s=20)
+                    self.decision_clients[m["provider"]].systemone(m["id"], "ping", {"alive": noul("Is this a short test message?")}, timeout_s=20)
                 elif kind == "tts":
                     if not self.sarvam.tts(m["id"], "Hello", "en", timeout_s=25):
                         raise ProviderError("empty audio")

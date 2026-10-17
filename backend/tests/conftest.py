@@ -61,7 +61,7 @@ def no_real_keys(monkeypatch):
     """Tests never read the real .env and never see real API keys, so nothing can reach a paid service."""
     import app.main
     monkeypatch.setattr(app.main, "load_env", lambda *a, **k: None)
-    for k in ("GEMINI_API_KEY", "SARVAM_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "YOUTUBE_API_KEY", "PEXELS_API_KEY",
+    for k in ("GEMINI_API_KEY", "SARVAM_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "YOUTUBE_API_KEY",
               "JINA_API_KEY", "FIRECRAWL_API_KEY", "AASAAN_ADMIN_TOKEN", "AASAAN_MODE"):
         monkeypatch.delenv(k, raising=False)
 
@@ -70,7 +70,7 @@ def no_real_keys(monkeypatch):
 def fresh_tool_runner(monkeypatch):
     """Each test gets its own ToolRunner (no shared breakers or budgets) that never really sleeps between retries."""
     from app.tools import ToolRunner
-    runner = ToolRunner(None)
+    runner = ToolRunner(None, rate_scale=1000)
     runner.sleep = lambda s: None
     monkeypatch.setattr(web, "RUNNER", runner)
     return runner
@@ -84,7 +84,7 @@ def fake_web(monkeypatch):
     monkeypatch.setattr(web, "http_post", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network blocked in tests")))
     monkeypatch.setattr(web, "_resolve", lambda host, port: [(2, 1, 6, "", ("93.184.216.34", port))])
     web._robots.clear()
-    for k in ("YOUTUBE_API_KEY", "PEXELS_API_KEY", "JINA_API_KEY", "FIRECRAWL_API_KEY"):
+    for k in ("YOUTUBE_API_KEY", "JINA_API_KEY", "FIRECRAWL_API_KEY"):
         monkeypatch.delenv(k, raising=False)
     return fw
 

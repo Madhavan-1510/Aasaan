@@ -338,7 +338,7 @@ def youtube_id(url: str) -> Optional[str]:
 
 
 def discover_images(query: str, n: int = 4) -> list[Candidate]:
-    """Wikimedia Commons first (no key), then Pexels if a key exists. Hotlinked thumbnails + attribution only."""
+    """Wikimedia Commons (no key). Hotlinked thumbnails + attribution only; nothing is copied to our server."""
     def search():
         r = http_get("https://commons.wikimedia.org/w/api.php", params={
             "action": "query", "format": "json", "generator": "search", "gsrsearch": f"{query} filetype:bitmap",
@@ -363,16 +363,6 @@ def discover_images(query: str, n: int = 4) -> list[Candidate]:
     for i, im in enumerate(res.value_or({}).get("images", [])):
         out.append(Candidate(f"i{i}", "image", im["url"], im["title"], "Wikimedia Commons", reason=im["desc"],
                              extra={"page_url": im["page_url"], "author": im["author"], "license": im["license"]}))
-    key = os.environ.get("PEXELS_API_KEY")
-    if key and len(out) < n:
-        try:
-            r = http_get("https://api.pexels.com/v1/search", headers={"Authorization": key},
-                         params={"query": query, "per_page": n - len(out)})
-            for i, ph in enumerate((r.json() or {}).get("photos", [])):
-                out.append(Candidate(f"p{i}", "image", ph["src"]["large"], ph.get("alt") or query, "Pexels",
-                                     extra={"page_url": ph.get("url", ""), "author": ph.get("photographer", ""), "license": "Pexels license"}))
-        except Exception as e:
-            log.warning("[aasaan] pexels discovery failed for %r: %s", query, e)
     return out
 
 
@@ -414,6 +404,22 @@ def wikipedia_lead_image(page_url: str) -> Optional[Candidate]:
                      reason=_strip_tags((md.get("ImageDescription") or {}).get("value", ""))[:200],
                      extra={"page_url": ii.get("descriptionurl", ""), "author": _strip_tags((md.get("Artist") or {}).get("value", "")) or "Unknown author",
                             "license": (md.get("LicenseShortName") or {}).get("value", "see source"), "lead_of": page_url})
+
+
+def discover_firecrawl(query: str, n: int = 5) -> list[Candidate]:
+    """Discovery FALLBACK (used only when cheaper discovery found too little): POST https://api.firecrawl.dev/v2/search.
+    Results are under data.web[]; 1 credit per result, so n is small. Through the ToolRunner: needs FIRECRAWL_API_KEY, counts against the
+    per-notebook cap (FIRECRAWL_MAX_CALLS_PER_NOTEBOOK, default 20), cached, and switched off for the session after a 401 or 402."""
+    def search():
+        r = http_post("https://api.firecrawl.dev/v2/search", headers={"Authorization": f"Bearer {os.environ.get('FIRECRAWL_API_KEY', '')}"},
+                      json={"query": query[:500], "limit": n, "sources": [{"type": "web"}]}, timeout=30)
+        check_response(r, "firecrawl search")
+        web = ((r.json() or {}).get("data") or {}).get("web") or []
+        return {"hits": [{"url": h["url"], "title": h.get("title") or "", "description": h.get("description") or ""} for h in web if h.get("url")]}
+
+    res = tool("firecrawl", search, cache_key=f"search:{n}:{query.lower()}", summary=f"firecrawl search '{query[:40]}'")
+    return [Candidate(f"f{i}", "link", h["url"], h["title"], _domain(h["url"]), reason=snippet(h["description"]))
+            for i, h in enumerate(res.value_or({}).get("hits", []))]
 
 
 def discover_grounded(provider_search, model_id: str, query: str, n: int = 6) -> list[Candidate]:

@@ -14,8 +14,9 @@ providers:
   typesafe:                   # Jev: a DECISION model (typed answers), not a chat model
     api_key_env: TYPESAFE_API_KEY
     base_url: https://api.typesafe.ai
-  openrouter:                 # optional extra Gemma 4 fallback (same models, different infrastructure)
+  openrouter:                 # extra Gemma 4 fallback AND a second route to the decision models (same System One schema)
     api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
   ollama:                     # optional offline mode only (small Gemma sizes are local-only)
     base_url: http://localhost:11434
 
@@ -37,7 +38,10 @@ models:
   or_gemma_26b:  { provider: openrouter, kind: chat, id: google/gemma-4-26b-a4b-it }
   sarvam_gemma4: { provider: sarvam,     kind: chat, id: gemma4 }                # Gemma 4 31B on Sarvam (beta), image capable
   sarvam_105b:   { provider: sarvam,     kind: chat, id: sarvam-105b }           # Indian-language reasoning
-  jev:           { provider: typesafe,   kind: decision, id: jev-latest }
+  # Decision models: typed answers (choice, score, yes/no probability), never generated text. Chain: see roles.decisions.
+  jev:           { provider: typesafe,   kind: decision, id: jev-latest }                    # TYPESAFE_API_KEY (preferred)
+  jev_or:        { provider: openrouter, kind: decision, id: "typesafe/jev-1.13" }           # Jev through OPENROUTER_API_KEY
+  mercury_decide: { provider: openrouter, kind: decision, id: "inception/mercury-decide:free", free_tier: true }  # best effort; no student data
   sarvam_stt:    { provider: sarvam,     kind: stt,       id: "saaras:v4" }      # docs: current default
   sarvam_stt_v3: { provider: sarvam,     kind: stt,       id: "saaras:v3" }      # legacy, still available
   sarvam_tts:    { provider: sarvam,     kind: tts,       id: "bulbul:v4-flash" }  # docs: latest
@@ -48,17 +52,19 @@ models:
 roles:
   intake:        { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, text_only], timeout_s: 45 }
   architect:     { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, linear_path], timeout_s: 45 }
-  curator:       { chain: [jev, gemma_26b, or_gemma_26b, search_order], timeout_s: 20 }
+  curator:       { chain: [gemma_26b, or_gemma_26b, search_order], timeout_s: 20 }   # Gemma relevance list when every decision provider failed
   teacher:       { chain: [gemma_26b, gemma_31b, or_gemma_26b, sarvam_gemma4, cached_lesson], timeout_s: 45 }
   teacher_indic: { chain: [sarvam_105b, gemma_31b, cached_lesson] }
   critic:        { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, rule_checks], timeout_s: 40 }
   quizzer:       { chain: [gemma_26b, gemma_31b, or_gemma_26b, cached_questions] }
-  diagnoser:     { chain: [jev, gemma_26b, or_gemma_26b, exact_match], timeout_s: 10 }
+  diagnoser:     { chain: [gemma_26b, or_gemma_26b, exact_match], timeout_s: 20 }    # new misconception labels (decisions only pick known ones)
   rewriter:      { chain: [gemma_26b, gemma_31b, or_gemma_26b, insert_review_step] }
   companion:     { chain: [gemma_26b, gemma_31b, or_gemma_26b, template_message] }
   companion_indic: { chain: [sarvam_105b, gemma_31b, template_message] }
   doubt:         { chain: [gemma_26b, gemma_31b, or_gemma_26b, template_answer] }
   doubt_indic:   { chain: [sarvam_105b, gemma_31b, template_answer] }
+  # Every gate (relevance, diagnosis, page health, claim support, ...) asks these in ONE batched call per provider:
+  decisions:     { chain: [jev, jev_or, mercury_decide, gemma_26b], timeout_s: 15 }
   # "<role>_indic" is used automatically when the student's language is not English.
 
 services:

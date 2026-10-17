@@ -40,7 +40,7 @@ Fill in `.env`:
 | `SARVAM_API_KEY` | optional | Indian-language chat, voice, translation. |
 | `TYPESAFE_API_KEY` | optional | Jev: grading misconceptions and ranking resources. |
 | `YOUTUBE_API_KEY` | optional | Video search. Without it (and without Gemini grounding) chapters have no videos. |
-| `PEXELS_API_KEY`, `JINA_API_KEY`, `FIRECRAWL_API_KEY` | optional | More images; higher quota for page reading; JavaScript-heavy pages. |
+| `JINA_API_KEY`, `FIRECRAWL_API_KEY`, `OPENVERSE_CLIENT_ID`+`_SECRET` | optional | Firecrawl is the last page tier and a discovery fallback, capped per notebook; Openverse credentials raise image-search limits. |
 | `AASAAN_CONTACT` | recommended | A URL or email put in the crawler's User-Agent so site owners can reach you. |
 | `AASAAN_NB_PER_HOUR` | optional | Notebooks one IP may create per hour (default 12). |
 | `AASAAN_CHAPTER_CONCURRENCY` | optional | Chapters built at once (default 2). Lower it if you hit rate limits. |

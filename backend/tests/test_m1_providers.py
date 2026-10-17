@@ -47,7 +47,11 @@ def test_models_yaml_is_consistent(router):
             assert step in cfg["models"] or step in NON_MODEL_STEPS, f"{role}: unknown step {step}"
     gemini_ids = {m["id"] for m in cfg["models"].values() if m["provider"] == "gemini_api"}
     assert gemini_ids == {"gemma-4-31b-it", "gemma-4-26b-a4b-it"}  # the only Gemma 4 ids the Gemini API serves
-    assert {m["id"] for m in cfg["models"].values() if m["provider"] == "openrouter"} == {"google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it"}
+    assert {m["id"] for m in cfg["models"].values() if m["provider"] == "openrouter" and m.get("kind", "chat") == "chat"} == {
+        "google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it"}
+    assert {m["id"] for m in cfg["models"].values() if m["provider"] == "openrouter" and m.get("kind") == "decision"} == {
+        "typesafe/jev-1.13", "inception/mercury-decide:free"}
+    assert cfg["roles"]["decisions"]["chain"] == ["jev", "jev_or", "mercury_decide", "gemma_26b"]
     assert not any("e4b" in m["id"] for m in cfg["models"].values() if m["provider"] == "gemini_api")
     # Jev is never in a text chain position that could be called as chat: decide() handles it
     assert cfg["models"]["jev"]["kind"] == "decision"
@@ -154,12 +158,17 @@ def test_jev_request_and_errors(monkeypatch, http):
         j.systemone("jev-latest", "s", {})
 
 
-def test_decide_logs_why_jev_was_skipped(store, monkeypatch):
+def test_decide_logs_why_a_decision_model_was_skipped(store, monkeypatch):
     r = ModelRouter(store=store, mode="live")
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert r.decide("diagnoser", "s", {"q": {"type": "noul", "instructions": "?"}}) is None
-    ev = store.events()[0]
-    assert ev["agent"] == "diagnoser" and ev["status"] == "fallback" and "TYPESAFE_API_KEY" in ev["error"]
+    skipped = {e["model_used"]: e["error"] for e in store.events() if e["agent"] == "decisions"}
+    assert "TYPESAFE_API_KEY" in skipped["jev"] and "OPENROUTER_API_KEY" in skipped["jev_or"] and "OPENROUTER_API_KEY" in skipped["mercury_decide"]
+    n = len(store.events())
+    r.decide("diagnoser", "s", {"q": {"type": "noul", "instructions": "?"}})
+    assert not any(e["agent"] == "decisions" for e in store.events()[: len(store.events()) - n])  # said once, not on every call
 
 
 def test_decide_is_silent_noop_in_mock_mode(router, store):
@@ -172,6 +181,7 @@ def _question():
 
 
 def test_diagnoser_uses_jev_label_when_known(store, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")
     r = ModelRouter(store=store, mode="live")
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {
         "correct": {"type": "noul", "noul": 0.02},
@@ -183,6 +193,7 @@ def test_diagnoser_uses_jev_label_when_known(store, monkeypatch):
 
 
 def test_diagnoser_falls_to_gemma_when_jev_says_other(store, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test-key-123456")
     r = ModelRouter(store=store, mode="live")
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {
         "correct": {"noul": 0.1}, "misconception": {"choice": "other", "confidence": 0.9}, "completeness": {"score": 0.2}})
@@ -229,6 +240,7 @@ def test_self_test_reports_each_model(store, monkeypatch):
     monkeypatch.setattr(r.providers["openrouter"], "generate", lambda *a, **k: "OK")
     monkeypatch.setattr(r.providers["ollama"], "generate", lambda *a, **k: (_ for _ in ()).throw(ProviderError("conn refused")))
     monkeypatch.setattr(r.jev, "systemone", lambda *a, **k: {"alive": {"noul": 0.9}})
+    monkeypatch.setattr(r.or_decider, "systemone", lambda *a, **k: {"alive": {"noul": 0.9}})
     monkeypatch.setattr(r.sarvam, "tts", lambda *a, **k: b"wav")
     monkeypatch.setattr(r.sarvam, "translate", lambda *a, **k: "namaste")
     rep = r.self_test(force=True)

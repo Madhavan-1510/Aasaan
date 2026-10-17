@@ -12,7 +12,7 @@ from test_web import PARAS
 @pytest.fixture
 def runner(monkeypatch):
     store = Store(":memory:")
-    r = ToolRunner(store, EventSink(store), Chaos(""))
+    r = ToolRunner(store, EventSink(store), Chaos(""), rate_scale=1000)
     r.sleep = lambda s: None
     monkeypatch.setattr(web, "RUNNER", r)
     r.store_ = store

@@ -44,7 +44,7 @@ Quiz: answer -> Diagnoser (code first, then Jev, then Gemma) -> finish -> Rewrit
 | `backend/app/engine.py` | The pipeline: `create_notebook`, `phase0`, `build_chapter`, `finish_chapter`, views, memory, doubts. Friendly errors for students |
 | `backend/app/worker.py` | In-process job worker with a concurrency limit and restart recovery |
 | `backend/app/router.py` | Model router: chains, retries, JSON repair, call cache, global semaphore, `decide()` for Jev, services, self test, events with errors |
-| `backend/app/web.py` | Page reading (3 tiers), SSRF guard, robots.txt, discovery (Wikipedia, YouTube, Commons/Pexels, Gemini grounding, seeds), verification, Wikipedia lead images |
+| `backend/app/web.py` | Page reading (3 tiers), SSRF guard, robots.txt, discovery (Wikipedia, YouTube, Commons, Gemini grounding, seeds), verification, Wikipedia lead images |
 | `backend/app/db.py` | SQLite (WAL): notebooks, sources, chapters, blocks, quiz_attempts, memory, sessions, events, jobs, cache |
 | `backend/app/schemas.py` | Output schemas and code validation (acyclic outlines, slide and notes rules, quiz keys, patch caps) |
 | `backend/app/voice.py` | Speech to text, text to speech, translation with fallbacks |
@@ -65,7 +65,7 @@ Quiz: answer -> Diagnoser (code first, then Jev, then Gemma) -> finish -> Rewrit
 4. **Jev is never in a text chain.** `router.decide()` asks it typed questions (Noul, Choice, Score) in one call. If it is down, unsure, or answers `other`, Gemma continues.
 5. **Third-party text is never pasted.** Fetched pages are used to check facts and as link snippets. A 40-word verbatim run from a fetched page is rejected in code, and last-resort lessons never copy it.
 6. **Code guards in front of model gates:** fuzzy Wikipedia hits and images must share a meaningful word with the chapter topic before the relevance gate; videos pass YouTube oEmbed; links must load and be allowed by robots.txt.
-7. **Images:** Wikimedia Commons with author and licence; the lead image of each linked Wikipedia article (only Commons files, never local fair-use images); Pexels if a key exists.
+7. **Images:** Wikimedia Commons with author and licence; the lead image of each linked Wikipedia article (only Commons files, never local fair-use images).
 8. **Demo mode** (no `GEMINI_API_KEY`) uses the offline mock models with a visible banner. Notes there are explicit placeholders. Web lookups (Wikipedia, Commons) are real.
 9. **Admin endpoints** (`/api/events`, `/api/admin/*`) need `AASAAN_ADMIN_TOKEN`, or localhost only. The brief did not ask for this; they would otherwise be public behind Caddy.
 10. **Chapter "done" and "in progress"** are learning state (opened, answered, finished); chapter status (`queued` .. `ready`, `failed`) is generation state.
