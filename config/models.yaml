@@ -57,6 +57,8 @@ roles:
   teacher_indic: { chain: [sarvam_105b, gemma_31b, cached_lesson] }
   critic:        { chain: [gemma_31b, gemma_26b, or_gemma_31b, sarvam_gemma4, rule_checks], timeout_s: 40 }
   quizzer:       { chain: [gemma_26b, gemma_31b, or_gemma_26b, cached_questions] }
+  # Fills small JSON diagram specs (code draws the SVG). deterministic_only = no spec, the chapter simply ships without that visual.
+  illustrator:   { chain: [gemma_26b, gemma_31b, sarvam_gemma4, deterministic_only], timeout_s: 25 }
   diagnoser:     { chain: [gemma_26b, or_gemma_26b, exact_match], timeout_s: 20 }    # new misconception labels (decisions only pick known ones)
   rewriter:      { chain: [gemma_26b, gemma_31b, or_gemma_26b, insert_review_step] }
   companion:     { chain: [gemma_26b, gemma_31b, or_gemma_26b, template_message] }

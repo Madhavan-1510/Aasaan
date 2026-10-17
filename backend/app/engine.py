@@ -9,8 +9,11 @@ State lives in SQLite, so everything is resumable after a restart. The UI never 
 from __future__ import annotations
 
 import base64
+import contextvars
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 import re
 import time
 import uuid
@@ -18,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import web
-from .agents import architect, companion, critic, curator, diagnoser, doubt, intake, quizzer, rewriter, teacher
+from .agents import architect, companion, critic, curator, diagnoser, doubt, illustrator, intake, quizzer, rewriter, teacher
 from .db import Store
 from .tools import ToolRunner
 from .router import AllFailed, ModelRouter
@@ -310,12 +313,25 @@ class Engine:
                 previous = content.model_dump()
                 self.store.set_chapter_status(cid, "drafting")
             assert content is not None and quiz_future is not None
+            # visuals are made from the final notes while the quiz finishes; they can only add to a chapter, never block it
+            illo_pool = ThreadPoolExecutor(max_workers=1)
+            illo_future = illo_pool.submit(contextvars.copy_context().run, illustrator.run, self.router, self.store, ch["title"],
+                                           content.notes_md, prof.language)
             quiz: QuizOut = quiz_future.result().value  # the quiz of the FINAL draft (earlier drafts' quizzes are discarded)
+        visuals = []
+        try:
+            visuals = illo_future.result(timeout=float(os.environ.get("AASAAN_ILLUSTRATOR_TIMEOUT_S", "90"))).blocks
+        except FutureTimeout:
+            self.router.note("illustrator", "failed", "Illustrator timed out; chapter ships without visuals", "AASAAN_ILLUSTRATOR_TIMEOUT_S exceeded")
+        except Exception as e:  # noqa: BLE001
+            self.router.note("illustrator", "failed", "Illustrator failed; chapter ships without visuals", f"{type(e).__name__}: {e}")
+        illo_pool.shutdown(wait=False, cancel_futures=True)
 
         blocks = [
             {"type": "notes", "content": {"markdown": content.notes_md}, "meta": {"refs": content.source_refs}},
             {"type": "slides", "content": {"cards": [s.model_dump(exclude={"image_query"}) for s in content.slides]}},
         ]
+        blocks[1:1] = visuals   # pictures sit right after the notes they illustrate
         for v in res.videos:
             blocks.append({"type": "video", "verified": True, "content": {"video_id": v.extra["video_id"], "title": v.title, "channel": v.source,
                                                                         "url": v.url}})

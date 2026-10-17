@@ -305,6 +305,12 @@ function blockHtml(b) {
       <figcaption>${esc(c.title)} <span class="muted">· ${esc(c.channel)}</span></figcaption></figure></section>`;
     case "image": { const a = c.attribution || {}; return `<section class="blk"><figure class="img"><img src="${esc(c.url)}" alt="${esc(c.title)}" loading="lazy" referrerpolicy="no-referrer">
       <figcaption>${esc(c.title)} · ${esc(a.author || "Unknown")} · ${esc(a.license || "")} · <a href="${esc(a.page_url || c.url)}" target="_blank" rel="noopener noreferrer">${esc(a.source || "source")}</a></figcaption></figure></section>`; }
+    case "visual": {
+      const a = c.attribution, p = c.payload || {};
+      const body = p.svg ? `<div class="vz-wrap" role="img" aria-label="${esc(c.alt_text)}">${p.svg}</div>`
+        : `<img src="${esc(p.url)}" alt="${esc(c.alt_text)}" loading="lazy" referrerpolicy="no-referrer">`;
+      const credit = a ? ` · ${esc(a.author || "Unknown")} · ${esc(a.license || "")} · <a href="${esc(a.page_url || p.url)}" target="_blank" rel="noopener noreferrer">${esc(a.source || "source")}</a>` : "";
+      return `<section class="blk"><figure class="img visual">${body}<figcaption>${esc(c.caption)}${credit}</figcaption></figure></section>`; }
     case "link": return `<section class="blk"><a class="linkcard" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer"><span class="lt">${esc(c.title)}</span>
       <span class="ls">${esc(c.source)} ${ICON.ext}</span><span class="lr">${esc(c.reason)}</span></a></section>`;
     case "quiz": return `<section class="blk" id="quizblk"><div class="blk-h"><h3>Check yourself</h3></div><div id="quiz"></div></section>`;

@@ -26,6 +26,8 @@ from .engine import Engine, UserError
 from .resilience import mask_key
 from .router import ModelRouter
 from .tools import ToolRunner
+from . import visuals
+from .visuals.cover import cover_svg
 from .worker import Worker
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,6 +98,7 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
     store = Store(db_path or os.environ.get("AASAAN_DB") or str(ROOT / "data" / "aasaan.db"))
     router = ModelRouter(store=store, mode=mode)
     tools = ToolRunner(store, router.sink, router.chaos)
+    visuals.register(tools)
     engine = Engine(store, router, upload_dir=upload_dir or os.environ.get("AASAAN_UPLOADS") or str(ROOT / "data" / "uploads"), tools=tools)
     worker = Worker(engine)
     nb_per_hour = int(os.environ.get("AASAAN_NB_PER_HOUR", "12"))
@@ -198,6 +201,13 @@ def create_app(db_path: Optional[str] = None, mode: Optional[str] = None, self_t
         nid = await run_in_threadpool(engine.create_notebook, learner_id, text, language, data)
         creations[ip] = recent + [now]
         return {"notebook_id": nid}
+
+    @app.get("/api/notebooks/{nid}/cover.svg")
+    def notebook_cover(nid: str):
+        """Generated cover (deterministic from the title): no network, no model."""
+        from fastapi.responses import Response
+        nb = engine.notebook_view(nid)
+        return Response(cover_svg(nb["title"], nb.get("goal") or ""), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
 
     @app.get("/api/notebooks/{nid}")
     def notebook(nid: str):

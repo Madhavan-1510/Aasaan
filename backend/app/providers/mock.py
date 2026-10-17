@@ -131,6 +131,28 @@ class MockProvider(Provider):
     def _critic(self, c: dict) -> dict:
         return {"verdict": "approve", "issues": [], "confidence": 0.9}
 
+    # ---- Illustrator ------------------------------------------------------
+    def _illustrator(self, c: dict) -> dict:
+        kind, head = c.get("kind", "flowchart"), (c.get("section") or "Idea")[:40]
+        meta = {"title": head, "alt_text": f"Diagram for {head}"}
+        if kind == "diagram":
+            return {"mermaid": "flowchart TD\nA([Start]) --> B[Do the step]\nB --> C([End])", **meta}
+        nums = [int(x) for x in re.findall(r"\d+", c.get("text", ""))][:6] or [1, 2, 3]
+        spec = {
+            "flowchart": {"nodes": [{"id": "a", "label": "Start", "shape": "start"}, {"id": "b", "label": "Do the step"}, {"id": "c", "label": "End", "shape": "end"}],
+                          "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}]},
+            "array": {"values": nums, "highlight": [0]},
+            "linked_list": {"values": nums, "head_label": "head"},
+            "stack_queue": {"kind": "stack", "items": nums},
+            "tree": {"nodes": [{"id": "r", "label": "Root"}, {"id": "a", "label": "Left"}, {"id": "b", "label": "Right"}],
+                     "edges": [{"parent": "r", "child": "a"}, {"parent": "r", "child": "b"}]},
+            "graph": {"nodes": ["A", "B", "C"], "edges": [{"from": "A", "to": "B"}, {"from": "B", "to": "C"}]},
+            "table": {"columns": ["Term", "Meaning"], "rows": [["Idea", "Short note"]]},
+            "timeline": {"events": [{"label": "Start", "when": 1}, {"label": "Later", "when": 2}]},
+            "plot": {"fn": "x^2", "x_range": [-3, 3]},
+        }[kind]
+        return {"type": kind, **meta, **spec}
+
     # ---- Quizzer ----------------------------------------------------------
     def _quizzer(self, c: dict) -> dict:
         ch, content = c["chapter"], c["content"]

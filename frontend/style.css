@@ -224,3 +224,7 @@ figure { margin: 0; } figcaption { font-size: .85rem; color: var(--muted); margi
   .blk { padding: 14px; }
   .ch-nav .btn { flex: 1; justify-content: center; font-size: .85rem; padding: 10px 8px; }
 }
+
+.vz-wrap { display: flex; justify-content: center; overflow-x: auto; padding: 10px; border: 1px solid var(--line, rgba(128,128,128,.25)); border-radius: 12px; background: rgba(255,255,255,.04); }
+.vz-wrap svg { max-width: 100%; height: auto; }
+figure.visual img { max-width: 100%; border-radius: 12px; }
