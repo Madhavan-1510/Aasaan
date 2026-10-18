@@ -9,6 +9,12 @@ Baseline for comparison: `eval/baseline/old.json` (5 frozen topics, old path). R
 - [ ] 10 approved test removals blocked by auto-mode: user deletes them or allows the edit (list in chat; markers already done)
 - [ ] Tag `pre-orchestrator` exists at a6414e0
 
+## Bugs and features noted by the user (2026-10-18)
+- [ ] **BUG chat-symbols:** the chat could not handle complex symbols (maths, Greek, arrows, sub/superscripts, code punctuation, mixed scripts). Reproduce, fix input handling, answer rendering and the model payload.
+- [ ] **BUG chat-memory:** chat did not keep or use its own earlier responses (no persistence of the conversation as context), and could not look outside the notebook's resources. Fix: send recent turns with each question, keep a rolling summary, and let the doubt answerer fall back to a web lookup when the notebook has no answer (labelled as outside the sources).
+- [ ] **FEATURE book-sources:** when the learner gives the base prompt (for example "source down books for ..."), find real books on the topic (open catalogues: Open Library, Project Gutenberg, OpenStax, publisher pages), add them as a Resource the chat agent can look up, and cite them in answers as numbered references [1], [2] that link to the exact page so the learner can read on.
+- Planned PRs: `m4/chat-fixes` (the two bugs) right after Intake, and `m4/book-sources` after Architect/Curator (it builds on the Curator and the citation chips).
+
 ## Branch plan (each depends on the previous unless noted)
 | # | Branch | Section | Scope |
 |---|---|---|---|
@@ -16,6 +22,8 @@ Baseline for comparison: `eval/baseline/old.json` (5 frozen topics, old path). R
 | 2 | `m4/intake-spike` | 3 | Indra spike on fixtures + report + adoption decision (Docker, not native Windows) |
 | 3 | `m4/intake` | 3 | extraction ladder, `source_pack`, quality report, Local-OCR-only setting, fixtures + 10 acceptance tests |
 | 4 | `m4/architect-curator` | 4 | outline + coverage map + validation, resource_pack, parallel run |
+| 4b | `m4/chat-fixes` | bugs | chat symbols, chat memory and out-of-resource lookup (see above) |
+| 4c | `m4/book-sources` | feature | books as a source, numbered [n] citations with links |
 | 5 | `m4/activity-feed` | 8 | SSE `decision` events (batched, replay, resume), `/decisions` endpoint, Activity timeline, "How this was made" chips |
 | 6 | `m4/content-notes` | 5.1, 5.2 | depth profiles, typed Teacher sections, readability layer, expansion pass |
 | 7 | `m4/critic-fixes` | 5.4 | claim-level Fixes loop (max 2), draft -> "Verified N of M", in-place patch |
