@@ -296,6 +296,7 @@ class CompanionOut(Strict):
 class DoubtOut(Strict):
     answer: str
     source_refs: list[str] = Field(default_factory=list)
+    covered: bool = True                  # False: the notebook's material does not answer this (the engine may then look it up online)
 
     @field_validator("answer")
     @classmethod

@@ -543,3 +543,10 @@ body.ws-open .nb.gmode { grid-template-columns: 420px minmax(0, 1fr); }
 
 /* header logo: the avatar inside a plain circle (neutral ink border, theme-aware surface, no yellow) */
 .brand-img { border-radius: 50%; border: 1.5px solid var(--fg); background: var(--card); padding: 1px; box-sizing: border-box; object-fit: cover; }
+
+/* chat answers: Markdown, math and numbered citations */
+.msg.bot p { margin: 0 0 .5em; } .msg.bot p:last-child { margin-bottom: 0; } .msg.bot ul, .msg.bot ol { margin: .3em 0 .5em 1.2em; padding: 0; }
+.msg.bot pre { overflow-x: auto; max-width: 100%; } .msg.bot code { overflow-wrap: anywhere; }
+.math { font-family: var(--serif); font-style: italic; white-space: nowrap; } .math sup, .math sub, .msg sup, .msg sub { font-size: .75em; line-height: 0; }
+sup.cite { margin-left: 1px; } button.cite { border: 0; background: transparent; padding: 0 2px; font-size: .85em; font-weight: 700; color: var(--primary); cursor: pointer; text-decoration: underline; min-height: 0; }
+button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
