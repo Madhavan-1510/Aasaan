@@ -512,7 +512,8 @@ class Engine:
                 out.append(c)
         return out[:5]
 
-    def chat_reply(self, nid: str, learner_id: str, text: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None, style: str = "") -> dict:
+    def chat_reply(self, nid: str, learner_id: str, text: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None, style: str = "",
+                   guide: bool = False) -> dict:
         """Answer a question about the notebook from its own sources and the chapter in focus. Returns {answer, refs}."""
         nb = self._nb(nid)
         prof = self.profile(learner_id, nb)
@@ -538,18 +539,20 @@ class Engine:
         history = self._recent_turns(nid, text)
         used = pool[:6]
         with self._scope(nid):
-            res = doubt.run(self.router, text, used, prof, notes, style, history=history)
+            res = doubt.run(self.router, text, used, prof, notes, style, history=history, guide=guide)
             out = res.value
             if not out.covered and not ctx_parts:        # the notebook cannot answer: look it up, say so, and cite what was found
                 web_pool = self._web_lookup(nb, text)
                 if web_pool:
-                    r2 = doubt.run(self.router, text, web_pool, prof, "", style, history=history, external=True)
+                    r2 = doubt.run(self.router, text, web_pool, prof, "", style, history=history, external=True, guide=guide)
                     by = {c["chunk_id"]: c for c in web_pool}
                     return {"answer": "That isn't in your notebook, so I looked it up online: " + r2.value.answer,
                             "refs": self._ref_chips(nid, r2.value.source_refs or [web_pool[0]["chunk_id"]], None, [c["chunk_id"] for c in web_pool], by)}
                 return {"answer": out.answer + "\n\n(That isn't covered in your notebook, and I couldn't look it up online right now.)",
                         "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
-        return {"answer": out.answer, "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
+        quote = f"\n\nFrom the source: “{out.quote[:300]}”" if out.quote else ""
+        return {"answer": out.answer + quote,
+                "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
 
     def _check_coverage(self, nid: str, chunks: list[dict]) -> Optional[dict]:
         """If the learner gave a contents list or syllabus, say whether every item maps to a chapter (and which do not). Also reports structural problems."""
@@ -626,7 +629,7 @@ class Engine:
             return []
 
     # ---- one chat turn: what does the student want, and do it
-    def handle_chat(self, nid: str, learner_id: str, question: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None) -> dict:
+    def handle_chat(self, nid: str, learner_id: str, question: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None, mode: str = "answer") -> dict:
         """{"type": "text", "text", "refs"} (stored by the caller) or {"type": "proposal", ...} (already stored as a chat card)."""
         chs = self.store.chapters(nid)
         intent = gates.route_intent(self.router, question, {"message": question[:500], "chapters": [c["title"] for c in chs][:25]})
@@ -649,7 +652,7 @@ class Engine:
             if p is None:
                 return {"type": "text", "refs": [], "text": "I couldn't turn that into a change to the course. Try something like \"add a chapter on Delta Lake after chapter 5\"."}
             return {"type": "proposal", "proposal": p}
-        out = self.chat_reply(nid, learner_id, question, chapter_id, block_ids, style="explain" if kind == "explain" else "")
+        out = self.chat_reply(nid, learner_id, question, chapter_id, block_ids, style="explain" if kind == "explain" else "", guide=(mode == "guide"))
         return {"type": "text", "text": out["answer"], "refs": out["refs"]}
 
     @staticmethod
@@ -1271,8 +1274,39 @@ class Engine:
         # The greeting is fixed text chosen by code from stored memory. A model never writes it, so it can never claim a history the student
         # does not have ("welcome back" on a first session). Opening the app opens a session each time, so "returning" means real history.
         first = not self.store.has_history(learner_id)
-        return {"message": self.greeting(first, nb["title"], prof.mistake_labels, self.store.last_summary(learner_id)),
-                "suggested_next": nxt, "mistake_labels": prof.mistake_labels, "is_first_session": first}
+        review = {} if first else self.review_summary(learner_id, nid)
+        msg = self.greeting(first, nb["title"], prof.mistake_labels, self.store.last_summary(learner_id))
+        if review.get("available"):                                  # built from stored mastery and mistakes only, never invented
+            msg += f" Want a {review['minutes']}-minute review of {', '.join(review['topics'][:2])}?"
+        return {"message": msg, "suggested_next": nxt, "mistake_labels": prof.mistake_labels, "is_first_session": first, "review": review}
+
+    REVIEW_BELOW = 70            # mastery under this percent is worth a review
+    REVIEW_MINUTES, REVIEW_QUESTIONS = 5, 5
+
+    def review_items(self, learner_id: str, nid: str) -> list[dict]:
+        """A short spaced review: questions on the concepts this learner is weakest at, from this notebook's own quizzes. Lowest mastery first."""
+        self._nb(nid)
+        mastery = self.store.memory_kind(learner_id, "mastery")
+        weak = {c: v["pct"] for c, v in mastery.items() if isinstance(v, dict) and v.get("pct", 100) < self.REVIEW_BELOW}
+        labels = {l.lower() for l in self.store.mistake_labels(learner_id)}
+        pool = []
+        for ch in self.store.chapters(nid):
+            qb = next((b for b in self.store.blocks(ch["id"]) if b["type"] == "quiz"), None) if ch["status"] == "ready" else None
+            for q in (qb["content"]["questions"] if qb else []):
+                key = q.get("objective") if q.get("objective") in weak else q.get("concept")
+                if key in weak or str(q.get("concept", "")).lower() in labels:
+                    pool.append({**q, "chapter_id": ch["id"], "_rank": weak.get(key, 60)})
+        pool.sort(key=lambda q: q["_rank"])
+        out = []
+        for q in pool[:self.REVIEW_QUESTIONS]:
+            q.pop("_rank", None)
+            out.append(q)
+        return out
+
+    def review_summary(self, learner_id: str, nid: str) -> dict:
+        items = self.review_items(learner_id, nid)
+        topics = list(dict.fromkeys(q.get("objective") or q.get("concept") for q in items))
+        return {"available": bool(items), "minutes": self.REVIEW_MINUTES, "topics": [t for t in topics if t][:3], "count": len(items)}
 
     @staticmethod
     def greeting(first_session: bool, title: str, labels: list[str], last_summary: Optional[str]) -> str:

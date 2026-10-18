@@ -597,6 +597,10 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 .slide-note { margin-top: 10px; font-size: .85rem; color: var(--muted); } .slide-note summary { cursor: pointer; }
 .slide.t-mistake { border-left: 4px solid var(--bad); } .slide.t-example { border-left: 4px solid var(--ok); } .slide.t-check { border-left: 4px solid var(--accent); }
 
+/* answer style toggle under the chat box */
+.moderow { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--blue-soft); margin: 0 0 6px; align-self: flex-start; }
+.moderow button { border: 0; background: transparent; color: var(--muted); padding: 3px 10px; border-radius: 8px; font-size: .78rem; font-weight: 600; } .moderow button[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); }
+
 /* ---- workspace v2: a whiteboard card on the left, the chat card docked on the right (see the layout brief) ---- */
 :root { --dot: #d8d0bf; } :root[data-theme="dark"] { --dot: #2f343d; }
 .board { display: flex; flex-direction: column; overflow: hidden; padding: 0; container: board / inline-size; }

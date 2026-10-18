@@ -247,6 +247,11 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.get("/api/notebooks/{nid}/review")
+    def review(nid: str, learner_id: str):
+        """A 5-minute spaced review from what this learner got wrong or is weak at (empty when nothing is weak)."""
+        return {"summary": engine.review_summary(learner_id, nid), "questions": engine.review_items(learner_id, nid)}
+
     @app.get("/api/notebooks/{nid}/decisions")
     def decisions(nid: str, since: int = 0, chapter_id: Optional[int] = None, agent: Optional[str] = None, severity: Optional[str] = None):
         """The Activity feed: what each agent decided and what came out of it, in plain words. Replays from `since` (0 = everything)."""
@@ -312,7 +317,7 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
 
     @app.post("/api/notebooks/{nid}/chat")
     async def chat(nid: str, learner_id: str = Form(...), text: str = Form(""), chapter_id: Optional[int] = Form(None), block_ids: str = Form(""),
-                   files: list[UploadFile] = File(default=[])):
+                   mode: str = Form("answer"), files: list[UploadFile] = File(default=[])):
         """One chat turn as a server-sent stream: `user` (stored), `status`, `delta` pieces of the validated answer, `done` (stored, with chips).
         The answer is validated against the sources BEFORE it is shown, so it streams from the checked text, not from raw model tokens."""
         engine._nb(nid)
@@ -342,7 +347,7 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
                     yield ev("done", {"id": None, "refs": []})
                     return
                 yield ev("status", {"text": "Thinking…"})
-                res = await run_in_threadpool(engine.handle_chat, nid, learner_id, question, chapter_id, blocks)
+                res = await run_in_threadpool(engine.handle_chat, nid, learner_id, question, chapter_id, blocks, "guide" if mode == "guide" else "answer")
                 if res["type"] == "proposal":      # a card with Apply and Dismiss: nothing has changed yet
                     p = res["proposal"]
                     yield ev("proposal", {"id": p["message_id"], "proposal": {k: v for k, v in p.items() if k != "message_id"}, "content": p["summary"]})

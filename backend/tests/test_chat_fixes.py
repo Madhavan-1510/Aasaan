@@ -24,7 +24,7 @@ def _chat(engine, worker, monkeypatch, covered=True):
     worker.run_until_idle()
     seen = {}
 
-    def fake_run(router, q, chunks, prof, notes="", style="", history=None, external=False):
+    def fake_run(router, q, chunks, prof, notes="", style="", history=None, external=False, guide=False):
         seen.setdefault("calls", []).append({"history": history, "external": external, "ids": [c["chunk_id"] for c in chunks]})
         from types import SimpleNamespace
         return SimpleNamespace(value=DoubtOut(answer="It is " + ("online [1]." if external else "in the notes [1]."), source_refs=[chunks[0]["chunk_id"]] if chunks else [],

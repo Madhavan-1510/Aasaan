@@ -428,6 +428,9 @@ class Store:
         self._run("INSERT OR REPLACE INTO memory(learner_id,kind,key,value,count,updated) VALUES(?,?,?,?,1,?)",
                   (learner_id, kind, key, _j(value), time.time()))
 
+    def memory_kind(self, learner_id: str, kind: str) -> dict:
+        return {r["key"]: _l(r["value"]) for r in self._all("SELECT key, value FROM memory WHERE learner_id=? AND kind=?", (learner_id, kind))}
+
     def get_memory(self, learner_id: str, kind: str, key: str, default: Any = None) -> Any:
         r = self._one("SELECT value FROM memory WHERE learner_id=? AND kind=? AND key=?", (learner_id, kind, key))
         return _l(r["value"], default) if r else default

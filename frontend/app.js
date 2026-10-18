@@ -213,6 +213,7 @@ async function workspace(nid, cid) {
       <button class="jump" id="jump" type="button" hidden>New messages ↓</button>
       <div class="chat-compose" id="chatcompose">
         <div class="suggest" id="suggest" aria-label="Suggestions"></div>
+        <div class="moderow" id="moderow" role="group" aria-label="How should I answer?"><button type="button" data-m="answer" aria-pressed="true">Just tell me</button><button type="button" data-m="guide" aria-pressed="false">Guide me</button></div>
         <div class="ctxrow" id="ctxrow"></div><div class="att-row" id="chatatts"></div>
         <div class="chat-input"><textarea id="chatinput" rows="2" placeholder="Ask about your course, or add a file or link…" aria-label="Message Aasaan"></textarea>
           <div class="toolbar"><button class="iconbtn" id="chatattach" type="button" aria-label="Attach files">${ICON.clip}</button>
@@ -242,7 +243,7 @@ async function workspace(nid, cid) {
   const pane = document.getElementById("chatpane");
   const showTab = (t) => { pane.dataset.tab = t; document.getElementById("ct-chat").setAttribute("aria-pressed", String(t === "chat")); document.getElementById("ct-act").setAttribute("aria-pressed", String(t === "activity")); if (t === "activity") S.activity.draw(); };
   document.getElementById("ct-chat").onclick = () => showTab("chat"); document.getElementById("ct-act").onclick = () => showTab("activity");
-  api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; renderNote(); }).catch(() => {});
+  api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; S.review = c.review; renderNote(); }).catch(() => {});
   connect(nid);
 }
 
@@ -375,8 +376,10 @@ function onSnapshot(nb) {
 
 function renderNote() {
   const n = document.getElementById("note"); if (!n) return;
-  n.innerHTML = S.companion ? `<div class="notice">${esc(S.companion)}<button class="x2" aria-label="Dismiss">×</button></div>` : "";
+  const rv = S.review && S.review.available ? `<button class="btn" id="startreview">Start ${S.review.minutes}-minute review</button>` : "";
+  n.innerHTML = S.companion ? `<div class="notice"><span>${esc(S.companion)} ${rv}</span><button class="x2" aria-label="Dismiss">×</button></div>` : "";
   const x = n.querySelector(".x2"); if (x) x.onclick = () => { S.companion = ""; renderNote(); };
+  const sr = n.querySelector("#startreview"); if (sr) sr.onclick = startReview;
 }
 
 function renderHead() {
@@ -582,6 +585,19 @@ function renderSlides(b) {
   el.querySelector("[data-full]").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.());
 }
 
+// a short spaced review from what this learner is weak at: the same quiz screen, questions from several chapters, practice only
+async function startReview() {
+  try {
+    const r = await api(`notebooks/${S.nb.id}/review?learner_id=${S.learner}`);
+    if (!r.questions.length) return toast("Nothing needs a review right now.");
+    document.getElementById("vt-course")?.click();
+    S.companion = ""; renderNote();
+    const host = document.getElementById("main"); host.innerHTML = `<section class="blk" id="quizblk"><div class="blk-h"><h3>${r.summary.minutes}-minute review</h3></div><div id="quiz"></div></section>`;
+    S.chapter = S.chapter || { id: r.questions[0].chapter_id, blocks: [] }; S.quiz = null;
+    startQuiz(r.questions, true);
+  } catch (e) { fail(e); }
+}
+
 // --- quiz: one question at a time, hint first, misconception feedback, marks, a mascot that reacts, then the course may change
 const MASCOT_SAY = {
   idle: ["Take your time. I'm here if you need a hint."], thinking: ["Let me check that..."],
@@ -632,7 +648,7 @@ function renderQuestion(attempt, hint) {
 async function submitAnswer(q, answer, attempt, els) {
   el_disable(true); els.forEach((b) => b.classList?.add("picked")); mascot("thinking");
   try {
-    const r = await api(`chapters/${S.chapter.id}/answer`, { learner_id: S.learner, session_id: S.session, question_id: q.id, answer, attempt });
+    const r = await api(`chapters/${q.chapter_id || S.chapter.id}/answer`, { learner_id: S.learner, session_id: S.session, question_id: q.id, answer, attempt });
     if (r.follow_up) return renderQuestion(attempt + 1, r.hint);
     const fb = document.getElementById("fb");
     if (r.result === "correct") {
