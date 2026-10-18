@@ -2,7 +2,7 @@
 
 Types: ArtifactReady, NeedHelp, Fixes, Clarify, Blocked, Release, Reject, Escalate.
 Guards (plain code, no model calls):
-  * hop limit: a chain of replies sharing one correlation id stops after MAX_HOPS (LoopStopped);
+  * hop limit: a correlation id carries at most MAX_HOPS messages (the first is hop 0); the next one raises LoopStopped;
   * time to live: an unread message expires and is never delivered;
   * dedupe: an identical open message (same sender, receiver, type, artifact and payload) is not stored twice;
   * who may ask whom: NeedHelp, Clarify and Fixes must follow the sender's `may_request` list in its manifest;
@@ -97,7 +97,9 @@ class Bus:
             raise BoardError(f"unknown message type {typ!r}")
         if typ == "Release" and frm != REFEREE:
             raise PermissionError("only the referee sends Release")
-        if self.registry and typ in PEER_TYPES and frm != REFEREE and to != REFEREE:
+        if typ in PEER_TYPES and frm != REFEREE and to != REFEREE:
+            if self.registry is None:                            # no manifests loaded means no way to check: refuse rather than allow everything
+                raise PermissionError(f"cannot check who may send {typ}: the bus has no agent manifests")
             if not self.registry.may_request(frm, to):
                 raise PermissionError(f"{frm} may not send {typ} to {to}")
 
@@ -108,9 +110,11 @@ class Bus:
         with self.store.transaction(immediate=True):
             rows = self.store.conn.execute(
                 "SELECT * FROM agent_messages WHERE to_agent=? AND handled=0 AND (expires_at IS NULL OR expires_at>?) ORDER BY id LIMIT ?", (agent, t, limit)).fetchall()
-            for r in rows:
-                self.store.conn.execute("UPDATE agent_messages SET handled=1 WHERE id=? AND handled=0", (r["id"],))
-            return [_msg(r) for r in rows]
+            mine = []
+            for r in rows:                                       # belt and braces: a row is delivered only if THIS call flipped it from unread to handled
+                if self.store.conn.execute("UPDATE agent_messages SET handled=1 WHERE id=? AND handled=0", (r["id"],)).rowcount == 1:
+                    mine.append(r)
+            return [_msg(r) for r in mine]
 
     def pending(self, agent: Optional[str] = None) -> int:
         sql, args = "SELECT COUNT(*) AS n FROM agent_messages WHERE handled=0 AND (expires_at IS NULL OR expires_at>?)", [self.now()]

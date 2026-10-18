@@ -48,7 +48,8 @@ class Budgets:
             return True
 
     def used(self, notebook_id: str) -> int:
-        return self._n[notebook_id]
+        with self._lock:
+            return self._n.get(notebook_id, 0)
 
 
 class Referee:
@@ -175,7 +176,7 @@ class Referee:
 
     def upgrade_released(self, artifact_id: int, payload: Any, *, verified: bool = True, flags: Optional[dict] = None) -> None:
         """Verification finished (or fixes landed): patch the already released artifact in place and bump its version."""
-        self.board.patch_released(artifact_id, payload, {"draft": False, "verified": verified, **(flags or {})})
+        self.board.patch_released(artifact_id, payload, {"draft": False, "verified": verified, **(flags or {})}, actor=REFEREE)
         a = self.board.get(artifact_id)
         self.emit.emit(a["notebook_id"], REFEREE, "released", what=f"{a['type']} (verified)" if verified else f"{a['type']} (unverified)", chapter_id=a["chapter_id"],
                        artifact_id=artifact_id, severity="info" if verified else "notice", dedupe_key=f"upgrade|{artifact_id}|{a['version']}")
@@ -185,7 +186,8 @@ class Referee:
         """Blocked work that can never start (a dependency failed or was replaced, or nothing is runnable) is marked failed with a reason."""
         failed: list[int] = []
         self.board.refresh_ready(notebook_id)           # work whose dependencies are done is ready, not stuck
-        while True:
+        for _ in range(1000):                           # each pass must fail something new; a pass that cannot ends the loop (never spins)
+            before = len(failed)
             arts = self.board.list(notebook_id)
             status = {a["id"]: a["status"] for a in arts}
             todo = []
@@ -203,11 +205,14 @@ class Referee:
                     failed.append(a["id"])
                     self.emit.emit(notebook_id, REFEREE, "stopped", what=f"{a['type'].replace('_', ' ')}", reason_code="no_progress", reason_text=why,
                                    outcome="failed", severity="warning", chapter_id=a["chapter_id"], artifact_id=a["id"], dedupe_key=f"stuck|{a['id']}")
+            if len(failed) == before:                   # nothing new could be failed (a transition refused): stop instead of looping on it
+                return failed
+        return failed
 
     # ------------------------------------------------------------------ one pass
     def tick(self, notebook_id: str) -> dict:
         """Recover expired claims, start what became ready, release what may be shown, and fail what can never run."""
-        reaped = self.board.reap_expired()
+        reaped = self.board.reap_expired(notebook_id)
         for r in reaped:
             self.emit.emit(r["notebook_id"], REFEREE, "stopped" if r["to"] == "failed" else "fell_back", what=f"{r['type'].replace('_', ' ')}",
                            reason_code="no_progress" if r["to"] == "failed" else "tool_unavailable", reason_text="it took too long",

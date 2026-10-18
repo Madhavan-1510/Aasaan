@@ -252,8 +252,14 @@ def test_stuck_work_and_deadlocks_fail_with_a_reason(parts):
     board.claim("architect")
     board.transition(dead, "failed", "architect")
     assert ref.detect_stuck("nb") == [child] and board.get(child)["status"] == "failed"
-    orphan = board.add("nb2", "notes", owner_agent="teacher", depends_on=[999])
-    assert ref.detect_stuck("nb2") == [orphan]
+    with pytest.raises(BoardError, match="do not exist"):
+        board.add("nb2", "notes", owner_agent="teacher", depends_on=[999])                  # a dangling dependency fails loudly instead of blocking forever
+    x, y = board.add("nb2", "notes", owner_agent="teacher"), board.add("nb2", "quiz", owner_agent="quizzer")
+    store = board.store
+    with store.transaction(immediate=True):                                                  # a dependency loop: nothing can ever run
+        store.conn.execute("UPDATE artifacts SET status='blocked', depends_on=? WHERE id=?", (f"[{y}]", x))
+        store.conn.execute("UPDATE artifacts SET status='blocked', depends_on=? WHERE id=?", (f"[{x}]", y))
+    assert sorted(ref.detect_stuck("nb2")) == sorted([x, y])
     assert all(d["severity"] == "warning" for d in emitter.recent("nb"))
 
 
@@ -423,3 +429,38 @@ def test_flags_and_missing_artifacts_fail_cleanly(parts):
         board.set_flag(999, x=1)
     with pytest.raises(BoardError):
         ref.allow_revision(999)
+
+
+# ------------------------------------------------------------------------------------------------ review fixes (PR #14, second round)
+def test_a_tick_only_reaps_its_own_notebook_and_callers_must_own_what_they_touch(parts, clock):
+    store, board, bus, emitter, ref = parts
+    a = board.add("nb", "outline", owner_agent="architect")
+    b = board.add("other", "video", owner_agent="curator")
+    board.claim("architect", lease_s=10, notebook_id="nb")
+    board.claim("curator", lease_s=10, notebook_id="other")
+    clock.t += 11
+    assert ref.tick("nb")["reaped"] == 1 and board.get(b)["status"] == "claimed"            # the other notebook's expired claim is left for its own tick
+    c = board.add("nb", "notes", owner_agent="teacher")
+    board.claim("teacher", notebook_id="nb")
+    with pytest.raises(PermissionError):
+        board.revise(c, "quizzer", {"x": 1})                                               # not the claim holder
+    with pytest.raises(PermissionError):
+        board.patch_released(c, {"x": 1}, actor="teacher")                                # referee only
+
+
+def test_a_crash_looping_task_still_runs_out_of_retries(parts, clock):
+    store, board, *_ = parts
+    a = board.add("nb", "outline", owner_agent="architect")
+    for _ in range(5):                                                                       # the worker dies mid-task on every start
+        board.claim("architect", lease_s=60)
+        board.recover_after_restart()
+    assert board.get(a)["attempts"] >= 3                                                      # refunds stopped after two, so the retry cap can bite
+
+
+def test_a_bus_without_manifests_refuses_peer_messages_and_multiline_prompts_are_scrubbed(parts):
+    from app.orchestrator import Bus
+    store, _, _, emitter, _ = parts
+    with pytest.raises(PermissionError, match="no agent manifests"):
+        Bus(store).send("nb", "critic", "teacher", "Fixes")
+    leak = emitter.emit("nb", "teacher", "fixed", what="x", reason_text="system prompt: line one\nline two secret")      # newlines are folded first, so the whole prompt goes
+    assert "secret" not in leak["reason_text"]
