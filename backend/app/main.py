@@ -247,6 +247,16 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.get("/api/dev/trace/{nid}")
+    def dev_trace(nid: str):
+        """Developer trace (AASAAN_TRACE=on only; never shown to learners): the board mirror, the agent messages, the technical events and every decision record."""
+        if os.environ.get("AASAAN_TRACE", "off").strip().lower() not in ("on", "1", "true", "yes"):
+            raise HTTPException(404, "not found")
+        engine._nb(nid)
+        sh = engine._shadow(nid)
+        board = sh.trace(nid) if sh else {"artifacts": [], "messages": [], "note": "AASAAN_ORCHESTRATOR is off for this notebook"}
+        return {**board, "events": store.events(300), "decisions": engine.decisions.recent(nid, limit=500)}
+
     @app.get("/api/notebooks/{nid}/scope")
     def scope(nid: str):
         return engine.scope_view(nid)

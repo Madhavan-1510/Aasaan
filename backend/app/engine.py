@@ -27,6 +27,8 @@ from .agents.common import overlap, tokens
 from . import coverage, depth as depth_mod, readability, quiz_grading
 from .quiz_grading import correct_text
 from .orchestrator.decisions import DecisionEmitter
+from .orchestrator.referee import orchestrator_mode
+from .orchestrator.shadow import Shadow
 from .tools import current_notebook
 from .db import Store
 from . import edits
@@ -100,6 +102,24 @@ class Engine:
             router.sink.hook = self._router_event
         self.upload_dir = Path(upload_dir)
         self.retry_delay_s = retry_delay_s
+
+    # ================================================================= orchestrator (shadow mode)
+    def _shadow(self, nid: str) -> Optional[Shadow]:
+        """The board mirror for this notebook when AASAAN_ORCHESTRATOR is on (or per-notebook and opted in), else None. The old build stays in charge."""
+        if orchestrator_mode() == "off":
+            return None
+        if getattr(self, "_shadow_obj", None) is None:
+            self._shadow_obj = Shadow(self.store, self.decisions)
+        return self._shadow_obj if self._shadow_obj.enabled(nid) else None
+
+    def _sh(self, nid: str, name: str, *a, **kw):
+        """Report a step to the board. A board problem is logged and ignored: observing must never fail a build."""
+        try:
+            sh = self._shadow(nid)
+            return getattr(sh, name)(nid, *a, **kw) if sh else None
+        except Exception as e:  # noqa: BLE001
+            self.router.note("referee", "fallback", f"board mirror skipped ({name})", f"{type(e).__name__}: {e}"[:150])
+            return None
 
     # ================================================================= activity feed
     def _dec(self, nid: str, agent: str, kind: str, what: str, **kw) -> None:
@@ -326,6 +346,7 @@ class Engine:
                                    goal=nb["goal"] or out.title)
         self.say(nid, f"The outline is ready: {len(out.chapters)} chapters. I'm writing chapter 1 first.", key="outline")
         self._dec(nid, "architect", "planned", f"{len(out.chapters)} chapters", counts={"chapters": len(out.chapters)}, dedupe_key=f"outline|{nid}")
+        self._sh(nid, "outline", len(out.chapters))
         self._check_coverage(nid, chunks)
         self._source_books(nid, self._nb(nid))
 
@@ -967,9 +988,11 @@ class Engine:
         claims_total = claims_flagged = None
         quiz_future = None
         dprof = depth_mod.profile(self.store, nb["id"])
+        self._sh(nb["id"], "chapter_start", cid, ch["position"])
         with ThreadPoolExecutor(max_workers=2) as pool:
             for attempt in range(MAX_REVISIONS + 1):
                 content = teacher.run(self.router, ch, chunks, link_refs, prof, issues, previous, self.store, depth=dprof).value
+                self._sh(nb["id"], "draft", cid)
                 self.store.set_chapter_status(cid, "checking")
                 # the quiz is written while the Critic checks this draft (saves a full round trip on the happy path)
                 quiz_future = pool.submit(quizzer.run, self.router, ch, content, chunks, prof, self.store)
@@ -977,12 +1000,15 @@ class Engine:
                 claims_total, claims_flagged = review.claims_total, review.claims_flagged
                 if review.verdict == "approve":
                     verified = True
+                    self._sh(nb["id"], "approved", cid, True)
                     break
                 open_points = [i.model_dump() for i in review.issues]
                 if attempt == MAX_REVISIONS:
                     self.router.note("critic", "fallback", f"Chapter '{ch['title'][:40]}' shipped unverified",
                                      f"Critic still had {len(review.issues)} issue(s) after {MAX_REVISIONS} revisions")
+                    self._sh(nb["id"], "approved", cid, False)
                     break
+                self._sh(nb["id"], "fixes", cid, len(review.issues))
                 revisions += 1
                 issues = [i.model_dump() for i in review.issues]
                 previous = content.model_dump()
@@ -1071,6 +1097,7 @@ class Engine:
                 "review_issues": [] if verified else self._claim_rows(open_points, chunks, allowed_extra)}
         self.store.replace_blocks(cid, blocks, "ready", meta)
         nid_ = nb["id"]
+        self._sh(nid_, "outputs_ready", cid)
         self._dec(nid_, "teacher", "accepted", f"notes for chapter {ch['position']}", chapter_id=cid, counts={"words": len(content.notes_md.split())},
                   dedupe_key=f"notes|{cid}|{int(time.time() // 5)}")
         if revisions:
