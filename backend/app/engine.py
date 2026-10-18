@@ -112,9 +112,12 @@ class Engine:
             raise UserError("unknown chapter")
         return ch
 
-    def _all_chunks(self, nid: str) -> list[dict]:
+    def _all_chunks(self, nid: str, books: bool = False) -> list[dict]:
+        """Every chunk of the student's own material. Books are only for the chat to look things up in (books=True), never course input."""
         out = []
         for s in self.store.sources(nid):
+            if s["kind"] == "book" and not books:
+                continue
             for c in s["chunks"]:
                 out.append({**c, "source_id": s["id"]})
         return out
@@ -248,7 +251,7 @@ class Engine:
         prof = self.profile(nb["learner_id"], nb)
         warnings: list[str] = []
         topics: list[dict] = []
-        srcs = self.store.sources(nid)[:MAX_SOURCES]
+        srcs = [s for s in self.store.sources(nid) if s["kind"] != "book"][:MAX_SOURCES]     # books are for the chat to look up, not course input
         if not srcs:
             self.say(nid, "Planning your course from your goal.", key="planning")
         for src in srcs:
@@ -288,6 +291,7 @@ class Engine:
         self.store.update_notebook(nid, title=out.title[:80], description=out.description, level=out.level,
                                    goal=nb["goal"] or out.title)
         self.say(nid, f"The outline is ready: {len(out.chapters)} chapters. I'm writing chapter 1 first.", key="outline")
+        self._source_books(nid, self._nb(nid))
 
     def _read_source(self, src: dict, nb: dict, warnings: list[str]) -> Optional[IntakeOut]:
         """Turn one source into chunks and topics. Text/PDF/URL chunking is code; photos go to the vision model."""
@@ -449,7 +453,9 @@ class Engine:
     def _ref_chips(self, nid: str, refs: list[str], ch: Optional[dict], order: Optional[list[str]] = None, web_chunks: Optional[dict] = None) -> list[dict]:
         """Chips under an answer: the chapter it drew on, and the student's resources/pages it cited. Clicking one opens that place.
         `order` is the chunk ids in the order the model saw them: a chip gets its number `n` so a [n] in the answer can link to it."""
-        chips, titles = [], {s["id"]: s["title"] for s in self.store.sources(nid)}
+        srcs = self.store.sources(nid)
+        chips, titles = [], {s["id"]: s["title"] for s in srcs}
+        book_url = {s["id"]: s["raw_ref"] for s in srcs if s["kind"] == "book"}
         if ch and not web_chunks:
             chips.append(self._chapter_ref(ch))
         page_chunks = {c["chunk_id"]: c for c in ((ch or {}).get("meta") or {}).get("page_chunks", [])}
@@ -457,7 +463,9 @@ class Engine:
         num = lambda r: {"n": order.index(r) + 1} if order and r in order else {}  # noqa: E731
         for r in refs:
             m = re.match(r"^(s[0-9a-f]+)-p(\d+)", r)
-            if m and m.group(1) in titles:
+            if m and m.group(1) in book_url:
+                chips.append({"kind": "link", "url": book_url[m.group(1)], "label": "Book · " + titles[m.group(1)][:34], **num(r)})
+            elif m and m.group(1) in titles:
                 chips.append({"kind": "resource", "id": m.group(1), "label": f"{titles[m.group(1)][:36]} · p{m.group(2)}", "page": int(m.group(2)), **num(r)})
             elif r in page_chunks:
                 chips.append({"kind": "link", "url": page_chunks[r].get("url", ""), "label": (page_chunks[r].get("title") or "web page")[:40], **num(r)})
@@ -480,7 +488,7 @@ class Engine:
             score = lambda c: overlap(words, f"{c['title']} {c['summary']}")  # noqa: E731
             best = max((c for c in chs if c["status"] == "ready"), key=score, default=None)
             ch = best if best is not None and score(best) > 0 else None
-        pool = self._all_chunks(nid) + (((ch or {}).get("meta") or {}).get("page_chunks") or [])
+        pool = self._all_chunks(nid, books=True) + (((ch or {}).get("meta") or {}).get("page_chunks") or [])
         pool.sort(key=lambda c: -overlap(words, c["text"]))
         notes = ""
         if ch and ch["status"] == "ready":
@@ -507,6 +515,31 @@ class Engine:
                 return {"answer": out.answer + "\n\n(That isn't covered in your notebook, and I couldn't look it up online right now.)",
                         "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
         return {"answer": out.answer, "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
+
+    def _source_books(self, nid: str, nb: dict) -> int:
+        """Find real books on the topic (Open Library) and keep them as a resource the chat can look things up in, cited as [n] with a link.
+        Best effort: no books (offline, nothing found) just means no books; it never fails the notebook."""
+        if os.environ.get("AASAAN_BOOKS", "on").strip().lower() in ("off", "0", "false", "no") or any(s["kind"] == "book" for s in self.store.sources(nid)):
+            return 0
+        try:
+            topic = search_topic(nb)
+            books = web.discover_books(topic, 5)
+        except Exception as e:  # noqa: BLE001
+            self.router.note("books", "fallback", "book search failed", f"{type(e).__name__}: {e}"[:150])
+            return 0
+        for b in books:
+            x = b.extra
+            by = ", ".join(x.get("authors") or [])
+            text = " ".join(p for p in [f"{b.title}" + (f" by {by}" if by else "") + (f" ({x['year']})." if x.get("year") else "."),
+                                        f"Topics: {', '.join(x['subjects'])}." if x.get("subjects") else "", f"Opens: \"{x['first_sentence']}\"" if x.get("first_sentence") else "",
+                                        "Can be read online through the Internet Archive." if x.get("ia") else ""] if p)
+            sid = self.store.add_source(nid, "book", b.url, b.title, text, [])
+            self.store.update_source_chunks(sid, [{"chunk_id": f"{sid}-p1-c1", "page": 1, "text": text}])
+            self.store.set_source_meta(sid, {"status": "ready", "authors": x.get("authors"), "year": x.get("year"), "ia": x.get("ia")})
+        if books:
+            self.say(nid, f"I also found {len(books)} book{'s' if len(books) != 1 else ''} on {search_topic(nb)[:40]} that the chat can look things up in.", key="books",
+                     refs=[{"kind": "link", "url": b.url, "label": b.title[:40]} for b in books[:3]])
+        return len(books)
 
     def _recent_turns(self, nid: str, current: str, limit: int = 8) -> list[dict]:
         """The last few chat turns (not narration, not proposals), oldest first, so a follow-up like "explain that again" has something to point at."""
@@ -749,9 +782,13 @@ class Engine:
         self._nb(nid)
         chs = self.store.chapters(nid)
         notes_refs = self._notes_refs(chs)
-        mine = []
+        mine, books = [], []
         for s in self.store.sources(nid):
             meta = s.get("meta") or {}
+            if s["kind"] == "book":
+                books.append({"kind": "book", "title": s["title"], "source": "openlibrary.org" + (" · " + ", ".join(meta["authors"][:2]) if meta.get("authors") else ""),
+                              "url": s["raw_ref"], "license": "", "author": str(meta.get("year") or ""), "used_in": []})
+                continue
             kind = s["kind"]
             size = meta.get("size") or len(s.get("extracted_text") or "") if kind == "text" else meta.get("size", 0)
             mine.append({"id": s["id"], "kind": "pasted" if (kind == "text" and s["raw_ref"] == "pasted") else kind, "title": s["title"],
@@ -782,7 +819,7 @@ class Engine:
                     continue
                 cur = found.setdefault(key, {**item, "used_in": []})
                 cur["used_in"].append({"id": ch["id"], "position": ch["position"], "title": ch["title"][:60]})
-        return {"mine": mine, "found": list(found.values())}
+        return {"mine": mine, "found": list(found.values()) + books}
 
     def resource_impact(self, nid: str, sid: str) -> dict:
         chs = self.store.chapters(nid)
