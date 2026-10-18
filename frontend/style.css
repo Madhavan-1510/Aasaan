@@ -600,3 +600,7 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 /* answer style toggle under the chat box */
 .moderow { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--blue-soft); margin: 0 0 6px; align-self: flex-start; }
 .moderow button { border: 0; background: transparent; color: var(--muted); padding: 3px 10px; border-radius: 8px; font-size: .78rem; font-weight: 600; } .moderow button[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); }
+
+.scopechips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; } .scopechip { display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; }
+.scopechip select { border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--fg); padding: 3px 10px; font: inherit; }
+.plist { margin: 6px 0; padding-left: 1.1rem; display: grid; gap: 4px; }

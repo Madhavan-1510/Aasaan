@@ -191,7 +191,7 @@ async function workspace(nid, cid) {
         <div class="vseg" role="group" aria-label="Sections"><button id="vt-course" aria-pressed="true">Course</button><button id="vt-res" aria-pressed="false">Resources</button><span class="vsep" aria-hidden="true"></span><button id="vt-chat" aria-pressed="true" aria-keyshortcuts="Control+." title="Show or hide the chat (Ctrl+.)">Chat<i class="dot" id="chatdot" hidden></i></button></div>
       </div>
       <div id="courseview">
-        <div class="nbhead"><div class="cover" id="cover"></div><div><h1 id="nbtitle"><span class="bar-s w60"></span></h1><p class="muted" id="nbdesc"></p></div><div class="ready" id="ready"></div></div>
+        <div class="nbhead"><div class="cover" id="cover"></div><div><h1 id="nbtitle"><span class="bar-s w60"></span></h1><p class="muted" id="nbdesc"></p><div class="scopechips" id="scopechips" aria-label="Course scope"></div></div><div class="ready" id="ready"></div></div>
         <div id="note"></div>
         <div class="nb"><button class="chaps-toggle" id="chaps" aria-expanded="false">${ICON.list} Chapters</button>
           <aside class="side" id="side" aria-label="Chapters"></aside><section class="main" id="main" aria-live="polite"></section></div>
@@ -225,6 +225,7 @@ async function workspace(nid, cid) {
   paintShell();
   try { S.nb = await api("notebooks/" + nid); } catch (e) { fail(e); location.hash = "#/"; return; }
   renderHead(); renderSide(); settleCourse(cid);
+  renderScope(nid);
   S.res = createResources({ nid, api, toast, openChapter: (id) => { document.getElementById("vt-course").click(); loadChapter(id, false, false); }, isVisible: () => !document.getElementById("resview").hidden });
   S.res.refresh(true);
   S.chat = createChat({
@@ -375,6 +376,23 @@ function renderNote() {
   const sr = n.querySelector("#startreview"); if (sr) sr.onclick = startReview;
 }
 
+// scope chips: depth and level. Changing one is a PROPOSAL in the chat (what would be rewritten, how long); nothing changes until it is applied
+async function renderScope(nid) {
+  const box = document.getElementById("scopechips"); if (!box) return;
+  let sc; try { sc = await api(`notebooks/${nid}/scope`); } catch { return; }
+  const sel = (name, label, opts, cur) => `<label class="scopechip"><span class="muted">${label}</span><select name="${name}" aria-label="${label}">${opts.map((o) => `<option value="${o}" ${o === cur ? "selected" : ""}>${o[0].toUpperCase() + o.slice(1)}</option>`).join("")}</select></label>`;
+  box.innerHTML = sel("depth", "Depth", sc.depths, sc.depth) + sel("level", "Level", sc.levels, sc.level);
+  box.querySelectorAll("select").forEach((el) => el.onchange = async () => {
+    const f = new FormData(); f.append(el.name, el.value);
+    try {
+      const r = await api(`notebooks/${nid}/scope`, null, f);
+      toast(r.proposal ? "I made a suggestion in the chat. Nothing changes until you apply it." : "That is already the setting.");
+      if (r.proposal) S.panes?.open();
+    } catch (e) { fail(e); }
+    el.value = sc[el.name];                                   // the setting only moves when the proposal is applied
+  });
+}
+
 function renderHead() {
   const nb = S.nb; if (!document.getElementById("nbtitle")) return;
   document.getElementById("nbtitle").textContent = nb.title;
@@ -491,6 +509,8 @@ function blockHtml(b) {
         : `<img src="${esc(p.url)}" alt="${esc(c.alt_text)}" loading="lazy" referrerpolicy="no-referrer">`;
       const credit = a ? ` · ${esc(a.author || "Unknown")} · ${esc(a.license || "")} · <a href="${esc(a.page_url || p.url)}" target="_blank" rel="noopener noreferrer">${esc(a.source || "source")}</a>` : "";
       return `<section class="blk"><figure class="img visual">${body}<figcaption>${esc(c.caption)}${credit}</figcaption></figure></section>`; }
+    case "practice": return `<section class="blk"><div class="blk-h"><h3>Practice</h3></div><p class="muted">${esc(c.note || "")}</p>
+      <ul class="plist">${(c.items || []).map((i) => `<li><a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a> <span class="muted">${esc(i.detail || "")}</span></li>`).join("")}</ul><p class="muted">Source: ${esc(c.source || "")}</p></section>`;
     case "link": return `<section class="blk"><a class="linkcard" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer"><span class="lt">${esc(c.title)}</span>
       <span class="ls">${esc(c.source)} ${ICON.ext}</span><span class="lr">${esc(c.reason)}</span></a></section>`;
     case "quiz": return `<section class="blk" id="quizblk"><div class="blk-h"><h3>Check yourself</h3></div><div id="quiz"></div></section>`;
@@ -684,11 +704,13 @@ async function finishQuiz() {
     const r = await api(`chapters/${S.chapter.id}/finish`, { learner_id: S.learner, session_id: S.session });
     S.nb = r.notebook; renderHead(); renderSide();
     const m = r.marks;
+    const proposed = (r.proposed || []).length ? `<p>${esc(r.reason)}</p>` : "";
     const added = r.added.length ? `<p>Your course changed: ${esc(r.reason)}</p><ul>${r.added.map((a) => `<li><button class="linkbtn" data-go="${a.id}">${esc(a.title)}</button></li>`).join("")}</ul>` : "<p>Your course stays the same.</p>";
     const rows = m ? `<ul class="marks">${m.by_concept.map((c) => `<li><span>${esc(c.concept)}</span><span class="bar" role="img" aria-label="${c.percent} percent"><i style="width:${c.percent}%"></i></span><span class="pc">${c.percent}%</span></li>`).join("")}</ul>` : "";
     const retake = m && m.missed.length ? `<button class="btn" id="retake">Retake only the ${m.missed.length} you missed</button>` : "";
     el.innerHTML = `${mascotHtml()}<div class="card"><div class="score">${m ? `${m.percent}%` : `${r.score.correct} of ${r.score.total}`} <span class="muted">${m ? (m.passed ? "· passed" : "· not yet at 70%") : "right first time"}</span></div>
-      ${rows}${m && m.weakest.length ? `<p class="muted">Worth another look: ${m.weakest.map(esc).join(", ")}</p>` : ""}${retake}${added}</div>`;
+      ${rows}${m && m.weakest.length ? `<p class="muted">Worth another look: ${m.weakest.map(esc).join(", ")}</p>` : ""}${retake}${proposed || added}</div>`;
+    if ((r.proposed || []).length) S.chat?.refresh?.();
     mascot(m && m.passed ? "proud" : "oops", m && m.passed ? undefined : "Let's look at the tricky parts again. I'll remember them.");
     el.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => loadChapter(Number(b.dataset.go)));
     const rb = el.querySelector("#retake");
