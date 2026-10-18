@@ -19,6 +19,12 @@ RUN useradd --create-home --uid 10001 aasaan \
 COPY --chown=aasaan:aasaan backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
+# Optional offline OCR (Indra, tiers A and B of Intake): pinned package + models baked into the image, so nothing downloads at run time.
+# Build without it:  docker build --build-arg WITH_INDRA=0 .   (Intake then uses the PDF text layer and the vision model only)
+ARG WITH_INDRA=1
+ENV INDRA_OCR_MODEL_DIR=/opt/indra-models
+RUN if [ "$WITH_INDRA" = "1" ]; then pip install --no-cache-dir indra-ocr==0.3.2     && python -c "import os; from huggingface_hub import snapshot_download as d; from indra_ocr.models import HF_REPO, HF_REVISION; d(HF_REPO, revision=HF_REVISION, local_dir=os.environ['INDRA_OCR_MODEL_DIR'], allow_patterns=['*.onnx', 'meta.json', 'config.json'])"     && chmod -R a+rX "$INDRA_OCR_MODEL_DIR"; fi
+
 # Copy application source code and configurations
 COPY --chown=aasaan:aasaan backend backend
 COPY --chown=aasaan:aasaan frontend frontend
