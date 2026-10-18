@@ -28,6 +28,7 @@ function cleanup() {
   if (S.hero) { S.hero.destroy(); S.hero = null; }
   clearInterval(S.poll); S.poll = null;
   if (S.es) { S.es.close(); S.es = null; }
+  setReconnecting(false);
 }
 
 function topbar(right = "") {
@@ -349,14 +350,75 @@ function chatChip(c) {
   } else if (c.kind === "link" && c.url) window.open(c.url, "_blank", "noopener");
 }
 
+function setReconnecting(on) {
+  let el = document.getElementById("reconnecting-badge");
+  if (!el && on) {
+    el = document.createElement("div");
+    el.id = "reconnecting-badge";
+    el.className = "reconnecting-badge";
+    el.textContent = "Reconnecting…";
+    document.body.appendChild(el);
+  }
+  if (el) el.classList.toggle("on", on);
+}
+
 function connect(nid) {
+  S.lastEventId = null;
+  let reconnectTimer = null;
   const apply = (nb) => onSnapshot(nb);
-  const poll = () => { if (!S.poll) S.poll = setInterval(async () => { try { apply(await api("notebooks/" + nid)); } catch { /* retry */ } }, 3000); };
+  const poll = () => {
+    if (!S.poll) {
+      S.poll = setInterval(async () => {
+        try { apply(await api("notebooks/" + nid)); } catch { /* retry */ }
+      }, 3000);
+    }
+  };
+
+  const clearReconnect = () => {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    setReconnecting(false);
+  };
+
   if (window.EventSource) {
     S.es = new EventSource(`/api/notebooks/${nid}/stream`);
-    S.es.onmessage = (e) => apply(JSON.parse(e.data));
-    S.es.onerror = poll;  // fall back to polling when the stream drops
-  } else poll();
+    S.es.onopen = () => {
+      clearReconnect();
+      if (S.poll) { clearInterval(S.poll); S.poll = null; }
+    };
+    S.es.onmessage = (e) => {
+      clearReconnect();
+      if (S.poll) { clearInterval(S.poll); S.poll = null; }
+      if (e.lastEventId) {
+        const id = parseInt(e.lastEventId, 10);
+        if (!isNaN(id)) {
+          if (S.lastEventId !== null && id <= S.lastEventId) return;
+          S.lastEventId = id;
+        }
+      }
+      try { apply(JSON.parse(e.data)); } catch { /* ignore malformed */ }
+    };
+    S.es.addEventListener("resync", async () => {
+      clearReconnect();
+      try {
+        const nb = await api("notebooks/" + nid);
+        apply(nb);
+      } catch { /* will catch up */ }
+    });
+    S.es.onerror = () => {
+      // Reconnecting state is standard EventSource behavior on server close (every ~200s).
+      // Only show visual indicator if reconnecting takes longer than 3.5 seconds.
+      if (S.es && S.es.readyState === EventSource.CONNECTING) {
+        if (!reconnectTimer) {
+          reconnectTimer = setTimeout(() => setReconnecting(true), 3500);
+        }
+      } else if (S.es && S.es.readyState === EventSource.CLOSED) {
+        clearReconnect();
+        poll();
+      }
+    };
+  } else {
+    poll();
+  }
 }
 
 function onSnapshot(nb) {

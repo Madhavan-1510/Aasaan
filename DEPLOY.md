@@ -144,3 +144,11 @@ Content Security Policy is controlled by `AASAAN_CSP_MODE`:
 2. Monitor violation reports in the logs: `docker compose logs -f app | grep "\[csp-report\]"`.
 3. Verify all necessary YouTube embeds, Google Fonts, and Wikimedia/Openverse images load cleanly without violations.
 4. Set `AASAAN_CSP_MODE=enforce` in your container environment variables to activate enforcement.
+
+## Server-Sent Events (SSE) and Ingress Timeout Resilience
+
+Azure Container Apps (ACA) ingress cuts any HTTP connection exceeding 240 seconds. To survive proxy cuts without dropping real-time updates:
+- **Planned Stream Close**: The `/api/notebooks/{nid}/stream` endpoint closes cleanly after ~200 seconds (`AASAAN_SSE_MAX_SECONDS`, default: 200, with small random jitter), sending a `retry: 2000` hint so the browser automatically reconnects after 2 seconds well before the 240-second cutoff.
+- **Heartbeats**: The server emits `: keepalive` comments every 15 seconds to prevent intermediate reverse proxies from terminating idle connections.
+- **Monotonic IDs & Replay Buffer**: Events carry monotonic `id:` headers backed by a per-notebook bounded in-memory buffer. Reconnecting clients supplying `Last-Event-ID` (or `?last_event_id=`) resume missed updates in order with zero duplicates or gaps.
+- **Resync on Gap**: If a replica restarts or a client reconnects with an ID older than the buffer, the server sends `event: resync` instructing the client to refetch current state via `/api/notebooks/{nid}`.
