@@ -326,6 +326,7 @@ class DoubtOut(Strict):
     answer: str
     source_refs: list[str] = Field(default_factory=list)
     covered: bool = True                  # False: the notebook's material does not answer this (the engine may then look it up online)
+    quote: str = ""                       # the exact source sentence the answer rests on (checked in code: dropped if it is not really in a source)
 
     @field_validator("answer")
     @classmethod

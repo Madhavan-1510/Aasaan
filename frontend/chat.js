@@ -1,7 +1,7 @@
 // Chat panel for a notebook: persistent thread (SQLite), code-written progress narration, streamed answers with source chips,
 // attachments with upload progress, "Ask about this" context, unread dot. The thread is delivered by cursor (messages?after=id),
 // so a dropped stream or a reload never loses a message.
-import { esc, ICON } from "./util.js";
+import { esc, ICON, store } from "./util.js";
 import { logoSvg } from "./pixel-mascot.js";
 import { renderMarkdown } from "./markdown.js";
 
@@ -13,7 +13,14 @@ export function createChat(ctx) {
   const el = { msgs: document.getElementById("msgs"), input: document.getElementById("chatinput"), send: document.getElementById("chatsend"),
                atts: document.getElementById("chatatts"), ctx: document.getElementById("ctxrow"), file: document.getElementById("chatfile"),
                pane: document.getElementById("chatpane") };
-  const st = { lastId: 0, seen: new Set(), files: [], context: [], busy: false, stick: true, seq: 0, cards: new Map() };
+  const st = { lastId: 0, seen: new Set(), files: [], context: [], busy: false, stick: true, seq: 0, cards: new Map(), guide: store.get("guide") === "1" };
+  // "Just tell me" answers directly; "Guide me" gives a hint and a question first. Remembered in this browser.
+  const modeRow = document.getElementById("moderow");
+  if (modeRow) {
+    const paint = () => modeRow.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.m === "guide") === st.guide)));
+    modeRow.querySelectorAll("button").forEach((b) => b.onclick = () => { st.guide = b.dataset.m === "guide"; store.set("guide", st.guide ? "1" : "0"); paint(); });
+    paint();
+  }
 
   // ------------------------------------------------------------------ rendering
   const attHtml = (list) => (list || []).map((a) => {
@@ -157,7 +164,7 @@ export function createChat(ctx) {
     const text = el.input.value.trim(); if (st.busy || !(text || st.files.length)) return;
     st.busy = true; sync2();
     const form = new FormData();
-    form.append("learner_id", ctx.learner); form.append("text", text);
+    form.append("learner_id", ctx.learner); form.append("text", text); form.append("mode", st.guide ? "guide" : "answer");
     const ch = ctx.getChapterId(); if (ch) form.append("chapter_id", String(ch));
     if (st.context.length) form.append("block_ids", st.context.map((c) => c.id).join(","));
     st.files.forEach((f) => form.append("files", f));

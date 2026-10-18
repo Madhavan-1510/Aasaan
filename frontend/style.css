@@ -596,3 +596,7 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 .slides:fullscreen { background: var(--bg); display: grid; align-content: center; padding: 6vh 8vw; } .slides:fullscreen .slide { font-size: 1.5rem; min-height: 50vh; } .slides:fullscreen h4 { font-size: 2.2rem; }
 .slide-note { margin-top: 10px; font-size: .85rem; color: var(--muted); } .slide-note summary { cursor: pointer; }
 .slide.t-mistake { border-left: 4px solid var(--bad); } .slide.t-example { border-left: 4px solid var(--ok); } .slide.t-check { border-left: 4px solid var(--accent); }
+
+/* answer style toggle under the chat box */
+.moderow { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--blue-soft); margin: 0 0 6px; align-self: flex-start; }
+.moderow button { border: 0; background: transparent; color: var(--muted); padding: 3px 10px; border-radius: 8px; font-size: .78rem; font-weight: 600; } .moderow button[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); }
