@@ -24,7 +24,7 @@ from typing import Optional
 from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
 from .agents.common import overlap, tokens
-from . import coverage
+from . import coverage, depth as depth_mod, readability
 from .orchestrator.decisions import DecisionEmitter
 from .tools import current_notebook
 from .db import Store
@@ -960,9 +960,10 @@ class Engine:
 
         issues, previous, content, verified, revisions, open_points = None, None, None, False, 0, []
         quiz_future = None
+        dprof = depth_mod.profile(self.store, nb["id"])
         with ThreadPoolExecutor(max_workers=2) as pool:
             for attempt in range(MAX_REVISIONS + 1):
-                content = teacher.run(self.router, ch, chunks, link_refs, prof, issues, previous, self.store).value
+                content = teacher.run(self.router, ch, chunks, link_refs, prof, issues, previous, self.store, depth=dprof).value
                 self.store.set_chapter_status(cid, "checking")
                 # the quiz is written while the Critic checks this draft (saves a full round trip on the happy path)
                 quiz_future = pool.submit(quizzer.run, self.router, ch, content, chunks, prof, self.store)
@@ -997,8 +998,21 @@ class Engine:
             self.router.note("illustrator", "failed", "Illustrator failed; chapter ships without visuals", f"{type(e).__name__}: {e}")
         illo_pool.shutdown(wait=False, cancel_futures=True)
 
+        notes_clean, read_meta = readability.clean_notes(content.notes_md, ch["title"])
+        if depth_mod.needs_expansion(notes_clean, dprof) and self.router.fake is None and not os.environ.get("AASAAN_NO_EXPAND"):
+            try:                                                   # one expansion pass: add examples, an edge case, a common mistake; then it is re-checked by size only
+                longer = teacher.run(self.router, ch, chunks, link_refs, prof, [{"step": 0, "problem": f"The notes are too short ({read_meta['words']} words; about "
+                                                                                    f"{dprof['words']} are needed). Add worked examples, an edge case and a common mistake."}],
+                                     content.model_dump(), self.store, depth=dprof).value
+                n2, m2 = readability.clean_notes(longer.notes_md, ch["title"])
+                if m2["words"] > read_meta["words"]:
+                    content, notes_clean, read_meta = longer, n2, m2
+                    self._dec(nb["id"], "teacher", "expanded", f"chapter {ch['position']}", chapter_id=cid, counts={"words": m2["words"]}, reason_code="too_short",
+                              dedupe_key=f"expand|{cid}|{int(time.time() // 5)}")
+            except Exception as e:  # noqa: BLE001  an expansion is a bonus, never a failure
+                self.router.note("teacher", "fallback", f"expansion of '{ch['title'][:40]}' skipped", f"{type(e).__name__}: {e}"[:150])
         blocks = [
-            {"type": "notes", "content": {"markdown": content.notes_md}, "meta": {"refs": content.source_refs}},
+            {"type": "notes", "content": {"markdown": notes_clean}, "meta": {"refs": content.source_refs}},
             {"type": "slides", "content": {"cards": [s.model_dump(exclude={"image_query"}) for s in content.slides]}},
         ]
         blocks[1:1] = visuals   # pictures sit right after the notes they illustrate
@@ -1013,7 +1027,8 @@ class Engine:
             blocks.append({"type": "link", "verified": True, "content": {"url": ln.url, "title": ln.title, "source": ln.source, "reason": ln.reason}})
         blocks.append({"type": "quiz", "content": {"questions": [q.model_dump() for q in quiz.questions]}})
         blocks.append({"type": "summary", "content": {"text": content.summary, "key_points": content.key_points}})
-        meta = {**ch["meta"], "unverified": not verified, "grounded": bool(chunks), "revisions": revisions,
+        meta = {**ch["meta"], "unverified": not verified, "grounded": bool(chunks), "revisions": revisions, "readability": read_meta, "depth": dprof["name"],
+                "common_mistakes": content.common_mistakes,
                 "page_chunks": page_chunks, "curator_notes": res.notes,
                 "review_issues": [] if verified else self._claim_rows(open_points, chunks, allowed_extra)}
         self.store.replace_blocks(cid, blocks, "ready", meta)
