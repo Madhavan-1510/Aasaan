@@ -570,6 +570,21 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 .claimline { margin: 0 0 10px; font-size: .85rem; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--blue-soft); color: var(--muted); }
 .claimline.ok::before { content: "\2713"; color: var(--ok); font-weight: 700; } .claimline.partial::before { content: "!"; color: var(--warn); font-weight: 700; }
 
+/* quiz: question types, marks, and the mascot that reacts */
+.qmascot { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 10px; } .qm-fig .pm-logo { height: 46px; display: block; }
+.qbubble { position: relative; background: var(--blue-soft); border-radius: 14px 14px 14px 4px; padding: 8px 12px; font-size: .9rem; max-width: 80%; }
+.qmascot[data-state="cheer"] .qm-fig, .qmascot[data-state="proud"] .qm-fig { animation: qhop .6s ease 2; } .qmascot[data-state="oops"] .qm-fig { animation: qshake .45s ease 1; }
+.qmascot[data-state="thinking"] .qm-fig { animation: qhop 1s ease infinite; }
+.qmascot[data-state="cheer"] .qbubble::after, .qmascot[data-state="proud"] .qbubble::after { content: " \2728"; }
+@keyframes qhop { 50% { transform: translateY(-6px); } } @keyframes qshake { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+@media (prefers-reduced-motion: reduce) { .qm-fig { animation: none !important; } }
+.option.toggle[aria-pressed="true"] { border-color: var(--primary); background: var(--blue-soft); }
+.q-tip { margin: 0 0 6px; font-size: .85rem; } .fillin { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg); font: inherit; margin-bottom: 8px; }
+.ordlist { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; } .ordlist li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.ordbtns { display: inline-flex; gap: 4px; }
+.marks { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; } .marks li { display: grid; grid-template-columns: minmax(80px, 1fr) 2fr 40px; align-items: center; gap: 8px; font-size: .88rem; }
+.marks .bar { height: 8px; border-radius: 4px; background: var(--blue-soft); overflow: hidden; } .marks .bar i { display: block; height: 100%; background: var(--ok); } .marks .pc { text-align: right; color: var(--muted); }
+
 /* ---- workspace v2: a whiteboard card on the left, the chat card docked on the right (see the layout brief) ---- */
 :root { --dot: #d8d0bf; } :root[data-theme="dark"] { --dot: #2f343d; }
 .board { display: flex; flex-direction: column; overflow: hidden; padding: 0; container: board / inline-size; }

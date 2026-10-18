@@ -201,20 +201,34 @@ class CriticOut(Strict):
 # -------------------------------------------------------------------- Quizzer
 class Question(Strict):
     id: str
-    type: Literal["mcq"] = "mcq"
+    type: Literal["mcq", "multi", "order", "fill_blank"] = "mcq"
     text: str
-    options: list[str]
+    options: list[str] = Field(default_factory=list)
     answer_key: str
     concept: str
     hint: str
     source_ref: Optional[str] = None
+    difficulty: int = 1                    # 1 easy, 2 medium, 3 hard: points are weighted by it
+    objective: Optional[str] = None        # which chapter objective this tests (the results screen groups by it)
+    explanation: str = ""                  # shown after the answer, with the misconception named by the Diagnoser
 
     @model_validator(mode="after")
     def _check(self):
-        if len(self.options) < 2 or len(set(self.options)) != len(self.options):
-            raise ValueError(f"{self.id}: options must be unique, at least 2")
-        if resolve_key(self) is None:
-            raise ValueError(f"{self.id}: answer_key does not match exactly one option")
+        if self.difficulty not in (1, 2, 3):
+            raise ValueError(f"{self.id}: difficulty is 1, 2 or 3")
+        if self.type == "fill_blank":
+            if not self.answer_key.strip():
+                raise ValueError(f"{self.id}: fill_blank needs at least one accepted answer")
+        elif self.type in ("multi", "order"):
+            keys = [k.strip() for k in self.answer_key.split("||") if k.strip()]
+            need = 2 if self.type == "multi" else 3
+            if len(self.options) < need + (1 if self.type == "multi" else 0) or len(set(self.options)) != len(self.options) or len(keys) < need or any(k not in self.options for k in keys):
+                raise ValueError(f"{self.id}: {self.type} needs unique options and an answer_key made of those options joined by ' || '")
+        else:
+            if len(self.options) < 2 or len(set(self.options)) != len(self.options):
+                raise ValueError(f"{self.id}: options must be unique, at least 2")
+            if resolve_key(self) is None:
+                raise ValueError(f"{self.id}: answer_key does not match exactly one option")
         if not self.concept.strip() or not self.hint.strip():
             raise ValueError(f"{self.id}: concept and hint are required")
         return self
@@ -237,8 +251,8 @@ class QuizOut(Strict):
 
     @model_validator(mode="after")
     def _check(self):
-        if not 3 <= len(self.questions) <= 5:
-            raise ValueError("quiz must have 3-5 questions")
+        if not 3 <= len(self.questions) <= 12:
+            raise ValueError("quiz must have 3-12 questions")
         ids = [q.id for q in self.questions]
         if len(set(ids)) != len(ids):
             raise ValueError("duplicate question ids")

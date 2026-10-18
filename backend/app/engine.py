@@ -24,7 +24,8 @@ from typing import Optional
 from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
 from .agents.common import overlap, tokens
-from . import coverage, depth as depth_mod, readability
+from . import coverage, depth as depth_mod, readability, quiz_grading
+from .quiz_grading import correct_text
 from .orchestrator.decisions import DecisionEmitter
 from .tools import current_notebook
 from .db import Store
@@ -1314,7 +1315,8 @@ class Engine:
         out = {"question_id": question_id, "follow_up": False, "result": d.result, "misconception": d.misconception,
                "hint": d.hint or q.hint, "confidence": d.confidence}
         if d.result == "correct" or attempt >= 2:  # hint first; reveal the answer only after a second try
-            out["correct_answer"] = resolve_key(q)
+            out["correct_answer"] = correct_text(q)
+            out["explanation"] = q.explanation
         return out
 
     def finish_chapter(self, learner_id: str, session_id: str, cid: int) -> dict:
@@ -1358,7 +1360,16 @@ class Engine:
                     self.store.add_job(nid, new_id, "chapter")
                     added.append({"id": new_id, "title": ins.title})
         self._refresh_status(nid)
-        return {"score": {"correct": correct, "total": total}, "added": added, "reason": reason,
+        qblock = next((b for b in self.store.blocks(cid) if b["type"] == "quiz"), None)
+        marks = quiz_grading.mark(rows, qblock["content"]["questions"]) if qblock else None
+        if marks:
+            for row in marks["by_concept"]:                              # mastery per concept: a running average the Diagnoser and Rewriter can read
+                old = self.store.get_memory(learner_id, "mastery", row["concept"], {"pct": row["percent"], "n": 0})
+                n = int(old.get("n", 0)) + 1
+                self.store.set_memory(learner_id, "mastery", row["concept"], {"pct": round((old["pct"] * (n - 1) + row["percent"]) / n), "n": n})
+            if marks["passed"] and not wrong:
+                self.store.update_chapter(cid, completed=True)
+        return {"score": {"correct": correct, "total": total}, "marks": marks, "added": added, "reason": reason,
                 "revisit": [w["misconception"] for w in wrong], "notebook": self.notebook_view(nid)}
 
     # ================================================================ doubts

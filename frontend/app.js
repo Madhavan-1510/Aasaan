@@ -564,48 +564,90 @@ function renderSlides(b) {
   el.onkeydown = (e) => { if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1); };
 }
 
-// --- quiz: one question at a time, hint first, misconception feedback, then the course may change
-function startQuiz(questions) {
-  S.quiz = { cid: S.chapter.id, qs: questions, i: 0, right: 0 };
+// --- quiz: one question at a time, hint first, misconception feedback, marks, a mascot that reacts, then the course may change
+const MASCOT_SAY = {
+  idle: ["Take your time. I'm here if you need a hint."], thinking: ["Let me check that..."],
+  cheer: ["Yes! That's right.", "Nicely done.", "Exactly."], oops: ["Close. Check the part about it in the notes.", "Not quite. Try again with the hint."],
+  proud: ["You've got this chapter. I'll bring back the tricky bits in your review."], learn: ["I'll remember this for your review."],
+};
+const say = (state) => { const l = MASCOT_SAY[state]; return l[Math.floor(Math.random() * l.length)]; };
+function mascot(state, text) {
+  const m = document.getElementById("qmascot"); if (!m) return;
+  m.dataset.state = state; m.querySelector(".qbubble").textContent = text || say(state);
+}
+const mascotHtml = () => `<div class="qmascot" id="qmascot" data-state="idle" role="status" aria-live="polite"><span class="qm-fig" aria-hidden="true">${logoSvg()}</span><span class="qbubble">${esc(say("idle"))}</span></div>`;
+
+function startQuiz(questions, retake = false) {
+  S.quiz = { cid: S.chapter.id, qs: questions, i: 0, right: 0, retake };
   renderQuestion(1, "");
+}
+
+function inputs(q) {
+  if (q.type === "multi") return `<p class="muted q-tip">Select all that apply.</p><div id="opts">${q.options.map((o, k) => `<button class="option toggle" aria-pressed="false" data-k="${k}">${esc(o)}</button>`).join("")}</div><button class="btn block" id="check">Check answer</button>`;
+  if (q.type === "order") return `<p class="muted q-tip">Put the steps in order.</p><ol id="ord" class="ordlist">${q.options.map((o) => `<li data-v="${esc(o)}"><span>${esc(o)}</span><span class="ordbtns"><button type="button" class="iconbtn up" aria-label="Move up">&uarr;</button><button type="button" class="iconbtn dn" aria-label="Move down">&darr;</button></span></li>`).join("")}</ol><button class="btn block" id="check">Check order</button>`;
+  if (q.type === "fill_blank") return `<input id="fillin" class="fillin" type="text" autocomplete="off" aria-label="Your answer" placeholder="Type your answer"><button class="btn block" id="check">Check answer</button>`;
+  return `<div id="opts">${q.options.map((o, k) => `<button class="option" data-k="${k}">${esc(o)}</button>`).join("")}</div>`;
 }
 
 function renderQuestion(attempt, hint) {
   const el = document.getElementById("quiz"); if (!el || !S.quiz) return;
   const { qs, i } = S.quiz, q = qs[i];
-  el.innerHTML = `<div class="crumb">Question ${i + 1} of ${qs.length}</div><h4 class="q-title">${esc(q.text)}</h4>
-    <div id="opts">${q.options.map((o, k) => `<button class="option" data-k="${k}">${esc(o)}</button>`).join("")}</div>
-    <div id="fb">${hint ? `<div class="feedback bad">Hint: ${esc(hint)}</div>` : ""}</div>`;
-  el.querySelectorAll(".option").forEach((b) => b.onclick = () => submitAnswer(q, b, attempt));
+  el.innerHTML = `${mascotHtml()}<div class="crumb">${S.quiz.retake ? "Retake · " : ""}Question ${i + 1} of ${qs.length}${q.difficulty > 1 ? ` · ${q.difficulty === 3 ? "hard" : "medium"}` : ""}</div><h4 class="q-title">${esc(q.text)}</h4>
+    ${inputs(q)}<div id="fb">${hint ? `<div class="feedback bad">Hint: ${esc(hint)}</div>` : ""}</div>`;
+  if (hint) mascot("oops", "Not quite. Try again with the hint.");
+  const type = q.type || "mcq";
+  if (type === "mcq") el.querySelectorAll(".option").forEach((b) => b.onclick = () => submitAnswer(q, b.textContent, attempt, [b]));
+  else if (type === "multi") {
+    el.querySelectorAll(".option").forEach((b) => b.onclick = () => b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true")));
+    el.querySelector("#check").onclick = () => { const picked = [...el.querySelectorAll('.option[aria-pressed="true"]')]; if (!picked.length) return toast("Pick at least one answer."); submitAnswer(q, picked.map((b) => b.textContent).join(" || "), attempt, picked); };
+  } else if (type === "order") {
+    const list = el.querySelector("#ord");
+    list.onclick = (e) => { const li = e.target.closest("li"), up = e.target.closest(".up"), dn = e.target.closest(".dn"); if (!li) return; if (up && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling); if (dn && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li); };
+    el.querySelector("#check").onclick = () => submitAnswer(q, [...list.children].map((li) => li.dataset.v).join(" || "), attempt, []);
+  } else {
+    const box = el.querySelector("#fillin"); box.focus();
+    const go = () => { if (box.value.trim()) submitAnswer(q, box.value.trim(), attempt, [box]); };
+    el.querySelector("#check").onclick = go; box.onkeydown = (e) => { if (e.key === "Enter") go(); };
+  }
 }
 
-async function submitAnswer(q, btn, attempt) {
-  document.querySelectorAll(".option").forEach((b) => (b.disabled = true));
-  btn.classList.add("picked");
+async function submitAnswer(q, answer, attempt, els) {
+  el_disable(true); els.forEach((b) => b.classList?.add("picked")); mascot("thinking");
   try {
-    const r = await api(`chapters/${S.chapter.id}/answer`, { learner_id: S.learner, session_id: S.session, question_id: q.id, answer: btn.textContent, attempt });
+    const r = await api(`chapters/${S.chapter.id}/answer`, { learner_id: S.learner, session_id: S.session, question_id: q.id, answer, attempt });
     if (r.follow_up) return renderQuestion(attempt + 1, r.hint);
     const fb = document.getElementById("fb");
     if (r.result === "correct") {
       if (attempt === 1) S.quiz.right++;
-      btn.classList.add("right"); fb.innerHTML = `<div class="feedback ok">Correct!</div>`; return nextQuestion();
+      els.forEach((b) => b.classList?.add("right")); mascot("cheer"); fb.innerHTML = `<div class="feedback ok">Correct!${r.explanation ? ` ${esc(r.explanation)}` : ""}</div>`; return nextQuestion();
     }
-    btn.classList.add("wrong");
+    els.forEach((b) => b.classList?.add("wrong"));
     const why = r.misconception ? `<p>It looks like: <strong>${esc(r.misconception)}</strong></p>` : "";
+    const partial = r.result === "partial" ? `<p>Partly right.</p>` : "";
     if (attempt === 1) {
-      fb.innerHTML = `<div class="feedback bad">${why}<p>Hint: ${esc(r.hint)}</p></div><button class="btn block" id="retry">Try again</button>`;
+      mascot("oops");
+      fb.innerHTML = `<div class="feedback bad">${partial}${why}<p>Hint: ${esc(r.hint)}</p></div><button class="btn block" id="retry">Try again</button>`;
       document.getElementById("retry").onclick = () => renderQuestion(2, r.hint);
     } else {
-      document.querySelectorAll(".option").forEach((b) => { if (b.textContent === r.correct_answer) b.classList.add("right"); });
-      fb.innerHTML = `<div class="feedback bad">${why}<p>Answer: ${esc(r.correct_answer)}</p></div>`; nextQuestion();
+      document.querySelectorAll(".option").forEach((b) => { if (String(r.correct_answer).split(", ").includes(b.textContent) || b.textContent === r.correct_answer) b.classList.add("right"); });
+      mascot("oops", r.misconception ? "I'll bring this one back in your review." : undefined);
+      fb.innerHTML = `<div class="feedback bad">${partial}${why}<p>Answer: ${esc(r.correct_answer)}</p>${r.explanation ? `<p>${esc(r.explanation)}</p>` : ""}</div>`; nextQuestion();
     }
-  } catch (e) { fail(e); }
+  } catch (e) { fail(e); el_disable(false); }
 }
+const el_disable = (d) => document.querySelectorAll("#quiz .option, #quiz #check, #quiz #fillin, #quiz .ordbtns button").forEach((b) => (b.disabled = d));
 
 function nextQuestion() {
   const last = S.quiz.i === S.quiz.qs.length - 1;
-  document.getElementById("fb").insertAdjacentHTML("beforeend", `<button class="btn block" id="nq">${last ? "Finish chapter" : "Next question"}</button>`);
-  document.getElementById("nq").onclick = () => { if (last) finishQuiz(); else { S.quiz.i++; renderQuestion(1, ""); } };
+  document.getElementById("fb").insertAdjacentHTML("beforeend", `<button class="btn block" id="nq">${last ? (S.quiz.retake ? "See result" : "Finish chapter") : "Next question"}</button>`);
+  document.getElementById("nq").onclick = () => { if (last) (S.quiz.retake ? finishRetake() : finishQuiz()); else { S.quiz.i++; renderQuestion(1, ""); } };
+  document.getElementById("nq").focus();
+}
+
+function finishRetake() {
+  const { right, qs } = S.quiz, el = document.getElementById("quiz");
+  el.innerHTML = `${mascotHtml()}<div class="card"><div class="score">${right} of ${qs.length} right this time</div><p class="muted">Practice only: your chapter result is unchanged.</p></div>`;
+  mascot(right === qs.length ? "proud" : "idle", right === qs.length ? "That's the lot. Well done." : "Getting there. The notes have what you need.");
 }
 
 async function finishQuiz() {
@@ -614,9 +656,16 @@ async function finishQuiz() {
   try {
     const r = await api(`chapters/${S.chapter.id}/finish`, { learner_id: S.learner, session_id: S.session });
     S.nb = r.notebook; renderHead(); renderSide();
+    const m = r.marks;
     const added = r.added.length ? `<p>Your course changed: ${esc(r.reason)}</p><ul>${r.added.map((a) => `<li><button class="linkbtn" data-go="${a.id}">${esc(a.title)}</button></li>`).join("")}</ul>` : "<p>Your course stays the same.</p>";
-    el.innerHTML = `<div class="card"><div class="score">${r.score.correct} of ${r.score.total} right first time</div>${added}</div>`;
+    const rows = m ? `<ul class="marks">${m.by_concept.map((c) => `<li><span>${esc(c.concept)}</span><span class="bar" role="img" aria-label="${c.percent} percent"><i style="width:${c.percent}%"></i></span><span class="pc">${c.percent}%</span></li>`).join("")}</ul>` : "";
+    const retake = m && m.missed.length ? `<button class="btn" id="retake">Retake only the ${m.missed.length} you missed</button>` : "";
+    el.innerHTML = `${mascotHtml()}<div class="card"><div class="score">${m ? `${m.percent}%` : `${r.score.correct} of ${r.score.total}`} <span class="muted">${m ? (m.passed ? "· passed" : "· not yet at 70%") : "right first time"}</span></div>
+      ${rows}${m && m.weakest.length ? `<p class="muted">Worth another look: ${m.weakest.map(esc).join(", ")}</p>` : ""}${retake}${added}</div>`;
+    mascot(m && m.passed ? "proud" : "oops", m && m.passed ? undefined : "Let's look at the tricky parts again. I'll remember them.");
     el.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => loadChapter(Number(b.dataset.go)));
+    const rb = el.querySelector("#retake");
+    if (rb) rb.onclick = () => { const all = S.chapter.blocks.find((b) => b.type === "quiz").content.questions; startQuiz(all.filter((q) => m.missed.includes(q.id)), true); };
   } catch (e) { fail(e); }
 }
 
