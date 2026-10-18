@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import web
-from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
+from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, slides as slides_agent, teacher
 from .agents.common import overlap, tokens
 from . import coverage, depth as depth_mod, readability, quiz_grading
 from .quiz_grading import correct_text
@@ -988,6 +988,9 @@ class Engine:
             illo_pool = ThreadPoolExecutor(max_workers=1)
             illo_future = illo_pool.submit(contextvars.copy_context().run, illustrator.run, self.router, self.store, ch["title"],
                                            content.notes_md, prof.language)
+            slides_pool = ThreadPoolExecutor(max_workers=1)        # the deck is written from the FINAL notes, beside the quiz and visuals; it can only add, never block
+            slides_future = None if os.environ.get("AASAAN_SLIDES", "on").strip().lower() in ("off", "0", "false", "no") else slides_pool.submit(
+                contextvars.copy_context().run, slides_agent.run, self.router, ch, content, prof, dprof)
             quiz: QuizOut = quiz_future.result().value  # the quiz of the FINAL draft (earlier drafts' quizzes are discarded)
             quiz, quiz_notes = gates.quiz_sanity(self.router, quiz, content.notes_md)
             for n in quiz_notes:
@@ -1000,6 +1003,16 @@ class Engine:
         except Exception as e:  # noqa: BLE001
             self.router.note("illustrator", "failed", "Illustrator failed; chapter ships without visuals", f"{type(e).__name__}: {e}")
         illo_pool.shutdown(wait=False, cancel_futures=True)
+        deck_cards = None
+        if slides_future is not None:
+            try:
+                deck_cards = [c.model_dump() for c in slides_future.result(timeout=float(os.environ.get("AASAAN_SLIDES_TIMEOUT_S", "90"))).value.slides]
+                self._dec(nb["id"], "slides", "accepted", f"{len(deck_cards)} slides", chapter_id=cid, counts={"slides": len(deck_cards)}, dedupe_key=f"slides|{cid}|{int(time.time() // 5)}")
+            except FutureTimeout:
+                self.router.note("slides", "failed", "slides timed out; the Teacher's own slides are used", "AASAAN_SLIDES_TIMEOUT_S exceeded")
+            except Exception as e:  # noqa: BLE001
+                self.router.note("slides", "failed", "slides failed; the Teacher's own slides are used", f"{type(e).__name__}: {e}"[:150])
+            slides_pool.shutdown(wait=False, cancel_futures=True)
 
         notes_clean, read_meta = readability.clean_notes(content.notes_md, ch["title"])
         if depth_mod.needs_expansion(notes_clean, dprof) and self.router.fake is None and not os.environ.get("AASAAN_NO_EXPAND"):
@@ -1016,7 +1029,7 @@ class Engine:
                 self.router.note("teacher", "fallback", f"expansion of '{ch['title'][:40]}' skipped", f"{type(e).__name__}: {e}"[:150])
         blocks = [
             {"type": "notes", "content": {"markdown": notes_clean}, "meta": {"refs": content.source_refs}},
-            {"type": "slides", "content": {"cards": [s.model_dump(exclude={"image_query"}) for s in content.slides]}},
+            {"type": "slides", "content": {"cards": deck_cards or [s.model_dump(exclude={"image_query"}) for s in content.slides]}},
         ]
         blocks[1:1] = visuals   # pictures sit right after the notes they illustrate
         for v in res.videos:

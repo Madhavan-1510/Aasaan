@@ -591,3 +591,8 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 .vz-wrap .fn { cursor: default; outline: none; } .vz-wrap .fn:hover > *:first-child, .vz-wrap .fn:focus > *:first-child { stroke-width: 3; }
 .vz-codewrap { margin-top: 8px; } .vz-codewrap summary { cursor: pointer; font-size: .85rem; color: var(--muted); } .vz-code { margin: 6px 0 0; padding: 10px 0; overflow-x: auto; background: var(--blue-soft); border-radius: 12px; font-size: .85rem; }
 .vz-code .cl { display: block; padding: 0 12px; } .vz-code .cl.hl { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* slides: typed cards, speaker notes, full screen */
+.slides:fullscreen { background: var(--bg); display: grid; align-content: center; padding: 6vh 8vw; } .slides:fullscreen .slide { font-size: 1.5rem; min-height: 50vh; } .slides:fullscreen h4 { font-size: 2.2rem; }
+.slide-note { margin-top: 10px; font-size: .85rem; color: var(--muted); } .slide-note summary { cursor: pointer; }
+.slide.t-mistake { border-left: 4px solid var(--bad); } .slide.t-example { border-left: 4px solid var(--ok); } .slide.t-check { border-left: 4px solid var(--accent); }
