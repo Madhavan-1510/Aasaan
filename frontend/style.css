@@ -584,3 +584,10 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 .ordbtns { display: inline-flex; gap: 4px; }
 .marks { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; } .marks li { display: grid; grid-template-columns: minmax(80px, 1fr) 2fr 40px; align-items: center; gap: 8px; font-size: .88rem; }
 .marks .bar { height: 8px; border-radius: 4px; background: var(--blue-soft); overflow: hidden; } .marks .bar i { display: block; height: 100%; background: var(--ok); } .marks .pc { text-align: right; color: var(--muted); }
+
+/* code flowcharts */
+.vz-tabs { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: var(--blue-soft); margin-bottom: 8px; }
+.vz-tabs button { border: 0; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: 9px; font-weight: 600; font-size: .85rem; } .vz-tabs button[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); }
+.vz-wrap .fn { cursor: default; outline: none; } .vz-wrap .fn:hover > *:first-child, .vz-wrap .fn:focus > *:first-child { stroke-width: 3; }
+.vz-codewrap { margin-top: 8px; } .vz-codewrap summary { cursor: pointer; font-size: .85rem; color: var(--muted); } .vz-code { margin: 6px 0 0; padding: 10px 0; overflow-x: auto; background: var(--blue-soft); border-radius: 12px; font-size: .85rem; }
+.vz-code .cl { display: block; padding: 0 12px; } .vz-code .cl.hl { background: color-mix(in srgb, var(--accent) 35%, transparent); }
