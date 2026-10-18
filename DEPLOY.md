@@ -122,3 +122,25 @@ Unfinished chapters are re-queued automatically after a restart (jobs are stored
 - Demo "kill the primary model": `curl -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' -d '{"model":"gemma_31b"}' https://YOUR_DOMAIN/api/admin/kill` and `/api/admin/revive` to undo.
 - Privacy: no accounts and no personal data are collected. A random learner id lives in the browser; memory (mistake labels, progress) stays in the local database. Uploaded files are stored under the data volume.
 - Rate limits: set `AASAAN_NB_PER_HOUR` and `AASAAN_CHAPTER_CONCURRENCY` to match your Gemini quota (check it in AI Studio).
+
+## Security Headers and Content Security Policy (CSP)
+
+On container platforms without Caddy (such as Azure Container Apps), the FastAPI application applies security headers directly via `SecurityHeadersMiddleware`:
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `X-Frame-Options: SAMEORIGIN`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` (sent automatically whenever `X-Forwarded-Proto: https` is received)
+- `Server`: stripped from all responses
+
+### Moving from Report-Only to Enforce Mode
+Content Security Policy is controlled by `AASAAN_CSP_MODE`:
+- `report-only` (default): Injects `Content-Security-Policy-Report-Only` pointing `report-uri` to `POST /csp-report`. Browser violations are logged without breaking page execution.
+- `enforce`: Injects `Content-Security-Policy` to actively block unauthorized origins.
+- `off`: Disables CSP headers completely.
+
+**Transition Workflow**:
+1. Deploy with `AASAAN_CSP_MODE=report-only` (the default).
+2. Monitor violation reports in the logs: `docker compose logs -f app | grep "\[csp-report\]"`.
+3. Verify all necessary YouTube embeds, Google Fonts, and Wikimedia/Openverse images load cleanly without violations.
+4. Set `AASAAN_CSP_MODE=enforce` in your container environment variables to activate enforcement.
