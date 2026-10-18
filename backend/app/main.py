@@ -26,12 +26,12 @@ from .db import Store
 from .engine import Engine, UserError
 from .resilience import mask_key
 from .router import ModelRouter
+from .settings import ROOT, get_db_path, get_uploads_dir, validate_and_prepare_paths
 from .tools import ToolRunner
 from . import visuals, web
 from .visuals.cover import cover_svg
 from .worker import Worker
 
-ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 
 
@@ -96,11 +96,15 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
                start_worker: bool = True, upload_dir: Optional[str] = None) -> FastAPI:
     load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    store = Store(db_path or os.environ.get("AASAAN_DB") or str(ROOT / "data" / "aasaan.db"))
+    resolved_db = get_db_path(db_path)
+    resolved_uploads = get_uploads_dir(upload_dir)
+    validate_and_prepare_paths(resolved_db, resolved_uploads)
+
+    store = Store(resolved_db)
     router = ModelRouter(store=store, provider_override=provider_override)
     tools = ToolRunner(store, router.sink, router.chaos)
     visuals.register(tools)
-    engine = Engine(store, router, upload_dir=upload_dir or os.environ.get("AASAAN_UPLOADS") or str(ROOT / "data" / "uploads"), tools=tools)
+    engine = Engine(store, router, upload_dir=resolved_uploads, tools=tools)
     worker = Worker(engine)
     nb_per_hour = int(os.environ.get("AASAAN_NB_PER_HOUR", "12"))
     creations: dict[str, list[float]] = {}
@@ -142,9 +146,23 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
             raise HTTPException(403, "internal endpoint: localhost only (set AASAAN_ADMIN_TOKEN to allow remote use)")
 
     # ================================================================ health
-    @app.get("/api/health")
     @app.get("/health")
     def health():
+        """Fast, dependency-free liveness probe: returns 200 with ok: true without touching DB or models."""
+        return {"ok": True}
+
+    @app.get("/health/ready")
+    @app.get("/api/health/ready")
+    def health_ready():
+        """Readiness probe: confirms database is writable. Returns 200 on success or 503 on failure."""
+        writable, msg = store.check_writable()
+        if not writable:
+            return JSONResponse({"ok": False, "reason": msg}, status_code=503)
+        return {"ok": True}
+
+    @app.get("/api/health")
+    def api_health():
+        """Detailed application status and model connectivity."""
         return {"ok": True, "app": "aasaan", "mode": router.mode, "model_ready": router.model_ready(), "killed": sorted(router.killed)}
 
     @app.get("/api/health/models")
