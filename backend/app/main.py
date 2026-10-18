@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from starlette.middleware.gzip import GZipMiddleware
 
 from .security_headers import SecurityHeadersMiddleware
+from .sse import StreamHub
 
 from .db import Store
 from .engine import Engine, UserError
@@ -113,6 +114,8 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
     creations: dict[str, list[float]] = {}
     log_ = logging.getLogger("aasaan")
 
+    sse_hub = StreamHub()
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if not router.model_ready():
@@ -121,12 +124,14 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
             threading.Thread(target=router.log_self_test, name="aasaan-self-test", daemon=True).start()
         task = asyncio.create_task(worker.run()) if start_worker else None
         yield
+        await sse_hub.shutdown()
         worker.stop()
         if task:
             task.cancel()
 
     app = FastAPI(title="Aasaan", lifespan=lifespan)
     app.state.engine, app.state.router, app.state.store, app.state.worker, app.state.tools = engine, router, store, worker, tools
+    app.state.sse_hub = sse_hub
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -286,8 +291,9 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         return engine.notebook_view(nid)
 
     @app.delete("/api/notebooks/{nid}")
-    def delete_notebook(nid: str):
+    async def delete_notebook(nid: str):
         engine.delete_notebook(nid)
+        await sse_hub.remove_notebook(nid)
         return {"ok": True}
 
     @app.post("/api/notebooks/{nid}/retry")
@@ -296,27 +302,14 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         return {"ok": True}
 
     @app.get("/api/notebooks/{nid}/stream")
-    async def stream(nid: str, request: Request):
-        """Server-sent events: a fresh notebook snapshot whenever anything changes (chapters filling in live)."""
+    async def stream(nid: str, request: Request, last_event_id: Optional[int] = Query(None)):
+        """Server-sent events: live notebook snapshot with monotonic IDs, keepalives, and auto-reconnect."""
         engine._nb(nid)
-
-        async def gen():
-            last, idle, seq = None, 0, 0
-            yield "retry: 2000\n\n"   # the browser reconnects by itself and gets the current full snapshot (state, not a delta)
-            while not await request.is_disconnected():
-                view = await run_in_threadpool(engine.notebook_view, nid)
-                payload = json.dumps(view)
-                if payload != last:
-                    last, idle, seq = payload, 0, seq + 1
-                    yield f"id: {seq}\ndata: {payload}\n\n"
-                else:
-                    idle += 1
-                    if idle % 15 == 0:
-                        yield ": ping\n\n"
-                await asyncio.sleep(1.0)
-
-        return StreamingResponse(gen(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(
+            sse_hub.subscribe(nid, engine, request, last_event_id=last_event_id),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ---- chat thread
     @app.get("/api/notebooks/{nid}/messages")
