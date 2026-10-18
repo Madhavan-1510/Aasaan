@@ -162,6 +162,7 @@ def test_wrong_characters_are_caught_by_the_page_health_gate():
     assert not h.ok and h.code == "low_confidence"                                       # the Tamil scan that Indra read as Latin garbage
     assert page_health(junk, 0.95, from_ocr=True, expected_script="Tamil").code == "unsupported_script"
     assert page_health("A normal English sentence about arrays and memory.", 0.97, from_ocr=True).ok
+    assert page_health(TAMIL, 0.95, from_ocr=True).ok                                    # Indic vowel signs are combining marks: real Tamil must not look like stray characters
     assert page_health("12 ,, ;; ..", None).code in ("empty", "not_words")
     pack = build_source_pack([IntakeInput("image", "tamil.png")], extractor=FakeOcr([RawPage(text=junk, tier="indra-ocr", confidence=0.549)]))
     assert pack.sources[0].status == "unreadable" and not pack.chunks                    # never ships the garbage as content
