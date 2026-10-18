@@ -76,7 +76,8 @@ def test_full_http_flow(client):
     fb = client.post(f"/api/chapters/{cid}/answer", json={"learner_id": lid, "session_id": sid, "question_id": q["id"], "answer": q["options"][-1]}).json()
     assert fb["result"] == "wrong" and fb["misconception"]
     fin = client.post(f"/api/chapters/{cid}/finish", json={"learner_id": lid, "session_id": sid}).json()
-    assert len(fin["added"]) == 1
+    assert len(fin["proposed"]) == 1 and fin["added"] == []
+    assert client.post(f"/api/notebooks/{nid}/proposals/{fin['proposed'][0]['id']}/apply").status_code == 200        # the Rewriter proposes; the learner applies
 
     for _ in range(300):  # everything fills in, including the review chapter
         v = client.get(f"/api/notebooks/{nid}").json()

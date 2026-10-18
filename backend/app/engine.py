@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import web
-from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, slides as slides_agent, teacher
+from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, practice as practice_agent, quizzer, rewriter, slides as slides_agent, teacher
 from .agents.common import overlap, tokens
 from . import coverage, depth as depth_mod, readability, quiz_grading
 from .quiz_grading import correct_text
@@ -311,6 +311,7 @@ class Engine:
         scope = gates.scoper(self.router, nb["goal"] or "", topics)
         if scope:
             self.router.note("scoper", "ok", f"scoped as {scope.get('track', '?')} / {scope.get('level', '?')}", f"decided by {scope['by']}")
+            self.store.cache_set(f"scope:{nid}", {k: scope.get(k) for k in ("track", "level")})
             if scope.get("level") and not nb.get("level"):
                 prof.level = scope["level"]
         res = architect.run(self.router, nb["goal"], topics, chunks, prof, nb["title"], (scope or {}).get("track"))
@@ -991,6 +992,11 @@ class Engine:
             illo_pool = ThreadPoolExecutor(max_workers=1)
             illo_future = illo_pool.submit(contextvars.copy_context().run, illustrator.run, self.router, self.store, ch["title"],
                                            content.notes_md, prof.language)
+            scope_ = self.store.cache_get(f"scope:{nb['id']}") or {}
+            practice_future = slides_pool_ = None
+            if scope_.get("track") in ("dsa", "exam") and os.environ.get("AASAAN_PRACTICE", "on").strip().lower() not in ("off", "0", "false", "no"):
+                slides_pool_ = ThreadPoolExecutor(max_workers=1)
+                practice_future = slides_pool_.submit(contextvars.copy_context().run, practice_agent.practice_for, scope_.get("track"), ch["title"], prof.level, nb["goal"] or "")
             slides_pool = ThreadPoolExecutor(max_workers=1)        # the deck is written from the FINAL notes, beside the quiz and visuals; it can only add, never block
             slides_future = None if os.environ.get("AASAAN_SLIDES", "on").strip().lower() in ("off", "0", "false", "no") else slides_pool.submit(
                 contextvars.copy_context().run, slides_agent.run, self.router, ch, content, prof, dprof)
@@ -1006,6 +1012,16 @@ class Engine:
         except Exception as e:  # noqa: BLE001
             self.router.note("illustrator", "failed", "Illustrator failed; chapter ships without visuals", f"{type(e).__name__}: {e}")
         illo_pool.shutdown(wait=False, cancel_futures=True)
+        practice_content = None
+        if practice_future is not None:
+            try:
+                practice_content = practice_future.result(timeout=float(os.environ.get("AASAAN_PRACTICE_TIMEOUT_S", "15")))
+            except Exception:  # noqa: BLE001  practice is a bonus: a timeout or failure means no practice block
+                practice_content = None
+            slides_pool_.shutdown(wait=False, cancel_futures=True)
+            if practice_content:
+                self._dec(nb["id"], "practice", "chose", f"{len(practice_content['items'])} practice items", chapter_id=cid, counts={"items": len(practice_content["items"])},
+                          dedupe_key=f"practice|{cid}|{int(time.time() // 5)}")
         deck_cards = None
         if slides_future is not None:
             try:
@@ -1044,6 +1060,8 @@ class Engine:
                                                                   "source": im.source, "page_url": im.extra.get("page_url", "")}}})
         for ln in res.links:
             blocks.append({"type": "link", "verified": True, "content": {"url": ln.url, "title": ln.title, "source": ln.source, "reason": ln.reason}})
+        if practice_content:
+            blocks.append({"type": "practice", "verified": True, "content": practice_content})
         blocks.append({"type": "quiz", "content": {"questions": [q.model_dump() for q in quiz.questions]}})
         blocks.append({"type": "summary", "content": {"text": content.summary, "key_points": content.key_points}})
         meta = {**ch["meta"], "unverified": not verified, "grounded": bool(chunks), "revisions": revisions, "readability": read_meta, "depth": dprof["name"],
@@ -1338,6 +1356,14 @@ class Engine:
         self.store.close_session(session_id, out.message)
         return {"message": out.message, "suggested_next": out.suggested_next, "revisit": wrong}
 
+    def scope_view(self, nid: str) -> dict:
+        nb = self._nb(nid)
+        return {"depth": depth_mod.name_for(self.store, nid), "level": nb["level"] or "beginner", "language": nb["language"],
+                "track": (self.store.cache_get(f"scope:{nid}") or {}).get("track", "general"), "depths": list(depth_mod.PROFILES), "levels": ["beginner", "intermediate", "advanced"]}
+
+    def propose_scope(self, nid: str, depth: Optional[str] = None, level: Optional[str] = None) -> Optional[dict]:
+        return edits.propose_scope(self, nid, depth, level)
+
     # ================================================================== quiz
     def answer(self, learner_id: str, session_id: str, cid: int, question_id: str, student_answer: str, attempt: int = 1) -> dict:
         ch = self._chapter(cid)
@@ -1390,7 +1416,7 @@ class Engine:
         if not wrong and ch["kind"] == "review" and ch["prereqs"]:  # a passed review clears its parent's flag
             self.store.update_chapter(ch["prereqs"][0], needs_review=False)
 
-        added, reason = [], "Course unchanged."
+        added, proposed, reason = [], [], "Course unchanged."
         if wrong and ch["kind"] != "review":
             made = [c for c in self.store.chapters(nid) if c["kind"] == "review" and c["meta"].get("session") == session_id]
             left = MAX_INSERTS_PER_SESSION - len(made)
@@ -1398,14 +1424,11 @@ class Engine:
                 chs = [{"id": c["id"], "title": c["title"], "position": c["position"], "kind": c["kind"]} for c in self.store.chapters(nid)]
                 rw = rewriter.run(self.router, chs, cid, wrong, self.store.mistake_counts(learner_id), left).value
                 reason = rw.reason or reason
-                for ins in rw.patch.insert[:left]:
-                    after = self._chapter(int(ins.after))
-                    self.store.shift_positions(nid, after["position"], 1)
-                    new_id = self.store.add_chapter(nid, after["position"] + 1, ins.title, ins.summary, ins.objectives, [after["id"]],
-                                                    after["source_refs"], kind="review", priority=80,
-                                                    meta={"session": session_id, "misconception": wrong[0]["misconception"]})
-                    self.store.add_job(nid, new_id, "chapter")
-                    added.append({"id": new_id, "title": ins.title})
+                inserts = [ins.model_dump() for ins in rw.patch.insert[:left]]
+                prop = edits.propose_review(self, nid, session_id, cid, inserts, wrong[0]["misconception"]) if inserts else None
+                if prop:                                    # the Rewriter PROPOSES: the course changes only when the learner applies the card
+                    proposed.append({"id": prop["id"], "summary": prop["summary"]})
+                    reason = "I suggested a short review. Apply it from the chat when you like."
         self._refresh_status(nid)
         qblock = next((b for b in self.store.blocks(cid) if b["type"] == "quiz"), None)
         marks = quiz_grading.mark(rows, qblock["content"]["questions"]) if qblock else None
@@ -1416,7 +1439,7 @@ class Engine:
                 self.store.set_memory(learner_id, "mastery", row["concept"], {"pct": round((old["pct"] * (n - 1) + row["percent"]) / n), "n": n})
             if marks["passed"] and not wrong:
                 self.store.update_chapter(cid, completed=True)
-        return {"score": {"correct": correct, "total": total}, "marks": marks, "added": added, "reason": reason,
+        return {"score": {"correct": correct, "total": total}, "marks": marks, "added": added, "proposed": proposed, "reason": reason,
                 "revisit": [w["misconception"] for w in wrong], "notebook": self.notebook_view(nid)}
 
     # ================================================================ doubts

@@ -247,6 +247,17 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.get("/api/notebooks/{nid}/scope")
+    def scope(nid: str):
+        return engine.scope_view(nid)
+
+    @app.post("/api/notebooks/{nid}/scope")
+    def set_scope(nid: str, depth: Optional[str] = Form(None), level: Optional[str] = Form(None)):
+        """A scope change is a PROPOSAL (what would be rewritten, roughly how long); it is applied from the chat card. None = nothing to change."""
+        if depth not in (None, "", "quick", "standard", "deep") or level not in (None, "", "beginner", "intermediate", "advanced"):
+            raise HTTPException(400, "unknown depth or level")
+        return {"proposal": engine.propose_scope(nid, depth or None, level or None)}
+
     @app.get("/api/notebooks/{nid}/review")
     def review(nid: str, learner_id: str):
         """A 5-minute spaced review from what this learner got wrong or is weak at (empty when nothing is weak)."""
