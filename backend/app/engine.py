@@ -23,6 +23,7 @@ from typing import Optional
 
 from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
+from .agents.common import overlap, tokens
 from .db import Store
 from . import edits
 from .tools import ToolRunner
@@ -123,13 +124,13 @@ class Engine:
         by_id = {c["chunk_id"]: c for c in all_chunks}
         picked = [by_id[r] for r in ch.get("source_refs", []) if r in by_id][:8]
         if len(picked) < 3 and all_chunks:
-            words = set(re.findall(r"\w{4,}", (ch["title"] + " " + " ".join(ch.get("objectives", [])) + " " + ch.get("summary", "")).lower()))
+            words = tokens(ch["title"] + " " + " ".join(ch.get("objectives", [])) + " " + ch.get("summary", ""), 3)
             ranked = sorted((c for c in all_chunks if c not in picked),
-                            key=lambda c: -len(words & set(re.findall(r"\w{4,}", c["text"].lower()))))
+                            key=lambda c: -overlap(words, c["text"]))
             for c in ranked:
                 if len(picked) >= k:
                     break
-                if words & set(re.findall(r"\w{4,}", c["text"].lower())):
+                if overlap(words, c["text"]):
                     picked.append(c)
         return picked
 
@@ -445,18 +446,21 @@ class Engine:
             return f"{b['type']}: {c.get('title', '')}"
         return ""
 
-    def _ref_chips(self, nid: str, refs: list[str], ch: Optional[dict]) -> list[dict]:
-        """Chips under an answer: the chapter it drew on, and the student's resources/pages it cited. Clicking one opens that place."""
+    def _ref_chips(self, nid: str, refs: list[str], ch: Optional[dict], order: Optional[list[str]] = None, web_chunks: Optional[dict] = None) -> list[dict]:
+        """Chips under an answer: the chapter it drew on, and the student's resources/pages it cited. Clicking one opens that place.
+        `order` is the chunk ids in the order the model saw them: a chip gets its number `n` so a [n] in the answer can link to it."""
         chips, titles = [], {s["id"]: s["title"] for s in self.store.sources(nid)}
-        if ch:
+        if ch and not web_chunks:
             chips.append(self._chapter_ref(ch))
         page_chunks = {c["chunk_id"]: c for c in ((ch or {}).get("meta") or {}).get("page_chunks", [])}
+        page_chunks.update(web_chunks or {})
+        num = lambda r: {"n": order.index(r) + 1} if order and r in order else {}  # noqa: E731
         for r in refs:
             m = re.match(r"^(s[0-9a-f]+)-p(\d+)", r)
             if m and m.group(1) in titles:
-                chips.append({"kind": "resource", "id": m.group(1), "label": f"{titles[m.group(1)][:36]} · p{m.group(2)}", "page": int(m.group(2))})
+                chips.append({"kind": "resource", "id": m.group(1), "label": f"{titles[m.group(1)][:36]} · p{m.group(2)}", "page": int(m.group(2)), **num(r)})
             elif r in page_chunks:
-                chips.append({"kind": "link", "url": page_chunks[r].get("url", ""), "label": (page_chunks[r].get("title") or "web page")[:40]})
+                chips.append({"kind": "link", "url": page_chunks[r].get("url", ""), "label": (page_chunks[r].get("title") or "web page")[:40], **num(r)})
         seen, out = set(), []
         for c in chips:
             k = (c["kind"], c.get("id") or c.get("url"), c.get("page"))
@@ -470,14 +474,14 @@ class Engine:
         nb = self._nb(nid)
         prof = self.profile(learner_id, nb)
         chs = [c for c in self.store.chapters(nid)]
-        words = set(re.findall(r"\w{3,}", text.lower()))
+        words = tokens(text)
         ch = next((c for c in chs if c["id"] == chapter_id), None)
         if ch is None and chs:   # no chapter in focus: the one whose title and summary best match the question
-            score = lambda c: len(words & set(re.findall(r"\w{3,}", f"{c['title']} {c['summary']}".lower())))  # noqa: E731
+            score = lambda c: overlap(words, f"{c['title']} {c['summary']}")  # noqa: E731
             best = max((c for c in chs if c["status"] == "ready"), key=score, default=None)
             ch = best if best is not None and score(best) > 0 else None
         pool = self._all_chunks(nid) + (((ch or {}).get("meta") or {}).get("page_chunks") or [])
-        pool.sort(key=lambda c: -len(words & set(re.findall(r"\w{3,}", c["text"].lower()))))
+        pool.sort(key=lambda c: -overlap(words, c["text"]))
         notes = ""
         if ch and ch["status"] == "ready":
             notes = next((b["content"].get("markdown", "") for b in self.store.blocks(ch["id"]) if b["type"] == "notes"), "")
@@ -488,9 +492,48 @@ class Engine:
                 ctx_parts.append(self._block_text(b)[:1500])
         if ctx_parts:
             notes = "The student is asking about this part of the course:\n" + "\n".join(ctx_parts) + "\n\n" + notes
+        history = self._recent_turns(nid, text)
+        used = pool[:6]
         with self._scope(nid):
-            res = doubt.run(self.router, text, pool[:6], prof, notes, style)
-        return {"answer": res.value.answer, "refs": self._ref_chips(nid, res.value.source_refs, ch)}
+            res = doubt.run(self.router, text, used, prof, notes, style, history=history)
+            out = res.value
+            if not out.covered and not ctx_parts:        # the notebook cannot answer: look it up, say so, and cite what was found
+                web_pool = self._web_lookup(nb, text)
+                if web_pool:
+                    r2 = doubt.run(self.router, text, web_pool, prof, "", style, history=history, external=True)
+                    by = {c["chunk_id"]: c for c in web_pool}
+                    return {"answer": "That isn't in your notebook, so I looked it up online: " + r2.value.answer,
+                            "refs": self._ref_chips(nid, r2.value.source_refs or [web_pool[0]["chunk_id"]], None, [c["chunk_id"] for c in web_pool], by)}
+                return {"answer": out.answer + "\n\n(That isn't covered in your notebook, and I couldn't look it up online right now.)",
+                        "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
+        return {"answer": out.answer, "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
+
+    def _recent_turns(self, nid: str, current: str, limit: int = 8) -> list[dict]:
+        """The last few chat turns (not narration, not proposals), oldest first, so a follow-up like "explain that again" has something to point at."""
+        msgs = [m for m in self.store.messages(nid, max(0, self.store.last_message_id(nid) - 40)) if m["kind"] == "chat" and m["content"]]
+        if msgs and msgs[-1]["role"] == "user" and msgs[-1]["content"].strip() == current.strip():
+            msgs = msgs[:-1]                                    # the question being answered is already stored; it is not history
+        return [{"role": m["role"], "text": m["content"][:500]} for m in msgs[-limit:]]
+
+    def _web_lookup(self, nb: dict, question: str) -> list[dict]:
+        """Up to 2 web pages about the question, as chunks w1, w2. The search query is the notebook's subject plus a few keywords,
+        never the learner's whole message. Any failure means no pages (the caller says so)."""
+        try:
+            q = (search_topic(nb) + " " + " ".join(sorted(tokens(question, 3))[:5])).strip()
+            cands = web.discover_wikipedia(q, 3)
+            if os.environ.get("FIRECRAWL_API_KEY"):
+                cands += web.discover_firecrawl(q, 3)
+            out: list[dict] = []
+            for c in cands:
+                page = web.fetch_page(c.url, self.store)
+                if page.ok and page.text:
+                    out.append({"chunk_id": f"w{len(out) + 1}", "text": page.text[:1200], "url": c.url, "title": page.title or c.title})
+                if len(out) >= 2:
+                    break
+            return out
+        except Exception as e:  # noqa: BLE001
+            self.router.note("doubt", "fallback", "online lookup failed", f"{type(e).__name__}: {e}"[:150])
+            return []
 
     # ---- one chat turn: what does the student want, and do it
     def handle_chat(self, nid: str, learner_id: str, question: str, chapter_id: Optional[int] = None, block_ids: Optional[list[int]] = None) -> dict:
@@ -522,12 +565,12 @@ class Engine:
     @staticmethod
     def _focus_chapter(chs: list[dict], text: str, chapter_id: Optional[int]) -> Optional[dict]:
         ch = next((c for c in chs if c["id"] == chapter_id), None)
-        words = set(re.findall(r"\w{3,}", text.lower()))
+        words = tokens(text)
         m = re.search(r"chapter\s+(\d+)", text.lower())
         if m:
             ch = next((c for c in chs if c["position"] == int(m.group(1))), ch)
         elif ch is None:
-            score = lambda c: len(words & set(re.findall(r"\w{3,}", f"{c['title']} {c['summary']}".lower())))  # noqa: E731
+            score = lambda c: overlap(words, f"{c['title']} {c['summary']}")  # noqa: E731
             ch = max(chs, key=score, default=None)
         return ch
 
@@ -1206,8 +1249,8 @@ class Engine:
         if not text or not text.strip():
             raise UserError("empty question")
         pool = self._chapter_chunks(ch, self._all_chunks(nb["id"])) + (ch["meta"].get("page_chunks") or [])
-        words = set(re.findall(r"\w+", text.lower()))
-        pool.sort(key=lambda c: -len(words & set(re.findall(r"\w+", c["text"].lower()))))
+        words = tokens(text)
+        pool.sort(key=lambda c: -overlap(words, c["text"]))
         notes = next((b["content"].get("markdown", "") for b in self.store.blocks(cid) if b["type"] == "notes"), "")
         res = doubt.run(self.router, text, pool[:6], prof, notes)
         audio_out = self.voice.tts(res.value.answer, prof.language)
