@@ -24,6 +24,7 @@ from typing import Optional
 from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
 from .agents.common import overlap, tokens
+from . import coverage
 from .db import Store
 from . import edits
 from .tools import ToolRunner
@@ -291,6 +292,7 @@ class Engine:
         self.store.update_notebook(nid, title=out.title[:80], description=out.description, level=out.level,
                                    goal=nb["goal"] or out.title)
         self.say(nid, f"The outline is ready: {len(out.chapters)} chapters. I'm writing chapter 1 first.", key="outline")
+        self._check_coverage(nid, chunks)
         self._source_books(nid, self._nb(nid))
 
     def _read_source(self, src: dict, nb: dict, warnings: list[str]) -> Optional[IntakeOut]:
@@ -515,6 +517,28 @@ class Engine:
                 return {"answer": out.answer + "\n\n(That isn't covered in your notebook, and I couldn't look it up online right now.)",
                         "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
         return {"answer": out.answer, "refs": self._ref_chips(nid, out.source_refs, ch, [c["chunk_id"] for c in used])}
+
+    def _check_coverage(self, nid: str, chunks: list[dict]) -> Optional[dict]:
+        """If the learner gave a contents list or syllabus, say whether every item maps to a chapter (and which do not). Also reports structural problems."""
+        try:
+            chs = self.store.chapters(nid)
+            for problem in coverage.validate_outline(chs):
+                self.router.note("architect", "fallback", "outline check", problem)
+            items = coverage.checklist_from_chunks(chunks)
+            if not items:
+                return None
+            cov = coverage.coverage_map(items, chs)
+            self.store.cache_set(f"coverage:{nid}", {**cov, "items": items})
+            gaps = cov["gaps"]
+            if gaps:
+                self.say(nid, f"{len(gaps)} item{'s' if len(gaps) != 1 else ''} in your contents list {'are' if len(gaps) != 1 else 'is'} not covered by a chapter yet: "
+                              + "; ".join(g[:40] for g in gaps[:3]) + ("…" if len(gaps) > 3 else "") + ".", key="coverage")
+            else:
+                self.say(nid, f"Every one of the {len(items)} items in your contents list is covered by a chapter.", key="coverage")
+            return cov
+        except Exception as e:  # noqa: BLE001  a check must never fail the notebook
+            self.router.note("architect", "fallback", "coverage check failed", f"{type(e).__name__}: {e}"[:150])
+            return None
 
     def _source_books(self, nid: str, nb: dict) -> int:
         """Find real books on the topic (Open Library) and keep them as a resource the chat can look things up in, cited as [n] with a link.
