@@ -566,6 +566,10 @@ button.cite:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 .act-who { font-weight: 600; } .act-time { display: block; font-size: .75rem; }
 @media (max-width: 860px) { .chat-tabs { margin-left: 0; } }
 
+/* fact-check line above the notes: "Verified N of M claims" */
+.claimline { margin: 0 0 10px; font-size: .85rem; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--blue-soft); color: var(--muted); }
+.claimline.ok::before { content: "\2713"; color: var(--ok); font-weight: 700; } .claimline.partial::before { content: "!"; color: var(--warn); font-weight: 700; }
+
 /* ---- workspace v2: a whiteboard card on the left, the chat card docked on the right (see the layout brief) ---- */
 :root { --dot: #d8d0bf; } :root[data-theme="dark"] { --dot: #2f343d; }
 .board { display: flex; flex-direction: column; overflow: hidden; padding: 0; container: board / inline-size; }
