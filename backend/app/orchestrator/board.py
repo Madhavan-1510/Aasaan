@@ -59,11 +59,16 @@ def _l(s: Optional[str], default: Any = None) -> Any:
         return default
 
 
+def _flags(raw: Optional[str]) -> dict:
+    v = _l(raw, {})
+    return v if isinstance(v, dict) else {}
+
+
 def _art(r) -> dict:
     a = dict(r)
     a["payload"] = _l(a.get("payload"))
     a["depends_on"] = _l(a.get("depends_on"), [])
-    a["flags"] = _l(a.get("flags"), {})
+    a["flags"] = _flags(a.get("flags"))
     return a
 
 
@@ -160,7 +165,9 @@ class Board:
             return cur.rowcount == 1
 
     def reap_expired(self) -> list[dict]:
-        """Claims whose lease ran out go back to `ready`, or to `failed` once the manifest's retries are spent. Returns what moved."""
+        """Claims whose lease ran out go back to `ready`, or to `failed` once the manifest's retries are spent. Returns what moved.
+        `max_retries` counts retries AFTER the first attempt: with max_retries=1 a task gets two attempts (attempts=1 -> ready, attempts=2 -> failed).
+        An expired claim is not reclaimed until this runs (the referee tick does it), so it still counts against nobody's concurrency cap."""
         out: list[dict] = []
         t = self.now()
         with self.store.transaction(immediate=True):
@@ -171,18 +178,14 @@ class Board:
                 self.store.conn.execute(
                     "UPDATE artifacts SET status=?, claimed_by=NULL, lease_until=NULL, error=?, updated_at=? WHERE id=? AND status='claimed'",
                     (to, "lease expired; retries used up" if spent else r["error"], t, r["id"]))
-                out.append({"id": r["id"], "agent": r["claimed_by"], "to": to, "notebook_id": r["notebook_id"], "chapter_id": r["chapter_id"], "type": r["type"]})
+                out.append({"id": r["id"], "agent": r["claimed_by"], "to": to, "notebook_id": r["notebook_id"], "chapter_id": r["chapter_id"], "type": r["type"], "attempts": r["attempts"]})
         return out
 
     def recover_after_restart(self) -> int:
-        """On start, nothing is really running: every claim returns to `ready` (a task that already used its retries fails)."""
+        """On start, nothing is really running: every claim returns to `ready`. The interrupted attempt is refunded (a restart is not the task's fault)."""
         with self.store.transaction(immediate=True):
-            rows = self.store.conn.execute("SELECT id, claimed_by, attempts FROM artifacts WHERE status='claimed'").fetchall()
-            for r in rows:
-                retries = self.registry.get(r["claimed_by"]).max_retries if self.registry and r["claimed_by"] in self.registry.agents else 1
-                self.store.conn.execute("UPDATE artifacts SET status=?, claimed_by=NULL, lease_until=NULL, updated_at=? WHERE id=?",
-                                        ("failed" if r["attempts"] > retries else "ready", self.now(), r["id"]))
-            return len(rows)
+            return self.store.conn.execute(
+                "UPDATE artifacts SET status='ready', claimed_by=NULL, lease_until=NULL, attempts=MAX(attempts-1, 0), updated_at=? WHERE status='claimed'", (self.now(),)).rowcount
 
     # ------------------------------------------------------------------ transitions
     def transition(self, aid: int, to: str, actor: str, *, payload: Any = None, error: Optional[str] = None, expect: Optional[str] = None) -> bool:
@@ -235,13 +238,15 @@ class Board:
             r = self.store.conn.execute("SELECT status, version, flags FROM artifacts WHERE id=?", (aid,)).fetchone()
             if r is None or r["status"] != "released":
                 raise StaleTransition(f"artifact {aid} is not released")
-            merged = {**_l(r["flags"], {}), **(flags or {})}
+            merged = {**_flags(r["flags"]), **(flags or {})}
             self.store.conn.execute("UPDATE artifacts SET payload=?, flags=?, version=version+1, updated_at=? WHERE id=?", (_j(payload), _j(merged), self.now(), aid))
             return int(r["version"]) + 1
 
     def set_flag(self, aid: int, **flags: Any) -> dict:
         with self.store.transaction(immediate=True):
             r = self.store.conn.execute("SELECT flags FROM artifacts WHERE id=?", (aid,)).fetchone()
-            merged = {**_l(r["flags"], {}), **flags}
+            if r is None:
+                raise BoardError(f"artifact {aid} does not exist")
+            merged = {**_flags(r["flags"]), **flags}
             self.store.conn.execute("UPDATE artifacts SET flags=?, updated_at=? WHERE id=?", (_j(merged), self.now(), aid))
             return merged

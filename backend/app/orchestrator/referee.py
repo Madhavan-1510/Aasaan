@@ -11,7 +11,7 @@ import threading
 from collections import defaultdict
 from typing import Any, Optional
 
-from .board import REFEREE, Board
+from .board import REFEREE, Board, BoardError
 from .bus import Bus, LoopStopped
 from .decisions import DecisionEmitter
 from .manifests import Registry
@@ -114,7 +114,9 @@ class Referee:
     def allow_revision(self, artifact_id: int) -> bool:
         """Critic -> Teacher: at most MAX_REVISIONS rounds, then the artifact ships as unverified."""
         a = self.board.get(artifact_id)
-        done = int((a["flags"] or {}).get("revisions", 0))
+        if a is None:
+            raise BoardError(f"artifact {artifact_id} does not exist")
+        done = int(a["flags"].get("revisions", 0))
         if done >= MAX_REVISIONS:
             self.board.set_flag(artifact_id, unverified=True)
             self.emit.emit(a["notebook_id"], REFEREE, "stopped", what="a revision loop", reason_code="loop_limit", reason_text=f"after {MAX_REVISIONS} tries",
@@ -182,6 +184,7 @@ class Referee:
     def detect_stuck(self, notebook_id: str) -> list[int]:
         """Blocked work that can never start (a dependency failed or was replaced, or nothing is runnable) is marked failed with a reason."""
         failed: list[int] = []
+        self.board.refresh_ready(notebook_id)           # work whose dependencies are done is ready, not stuck
         while True:
             arts = self.board.list(notebook_id)
             status = {a["id"]: a["status"] for a in arts}
@@ -209,7 +212,7 @@ class Referee:
             self.emit.emit(r["notebook_id"], REFEREE, "stopped" if r["to"] == "failed" else "fell_back", what=f"{r['type'].replace('_', ' ')}",
                            reason_code="no_progress" if r["to"] == "failed" else "tool_unavailable", reason_text="it took too long",
                            outcome="failed" if r["to"] == "failed" else "partial", severity="warning" if r["to"] == "failed" else "notice",
-                           chapter_id=r["chapter_id"], artifact_id=r["id"], dedupe_key=f"lease|{r['id']}|{self.board.get(r['id'])['attempts']}")
+                           chapter_id=r["chapter_id"], artifact_id=r["id"], dedupe_key=f"lease|{r['id']}|{r['attempts']}")
         self.board.refresh_ready(notebook_id)
         released = self.release_pending(notebook_id)
         stuck = self.detect_stuck(notebook_id)

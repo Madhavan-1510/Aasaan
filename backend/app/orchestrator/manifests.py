@@ -57,7 +57,7 @@ class Registry:
     def release_gate(self, artifact_type: str) -> str:
         """The strictest gate among the producers of this artifact type (proposals are never auto-released)."""
         gates = [m.release_gate for m in self.producers(artifact_type)] or ["none"]
-        return max(gates, key=GATE_STRICTNESS.__getitem__)
+        return max(gates, key=lambda g: GATE_STRICTNESS.get(g, len(GATE_STRICTNESS)))     # an unknown gate counts as the strictest
 
 
 def parse(raw: dict, known_roles: Optional[set[str]] = None) -> Registry:
@@ -90,9 +90,35 @@ def parse(raw: dict, known_roles: Optional[set[str]] = None) -> Registry:
         owners = [m.name for m in reg.producers(t)]
         if len(owners) > 1 and t not in SHARED_TYPES:
             problems.append(f"artifact type {t!r} has several producers: {', '.join(owners)}")
+    made = {t for m in reg.agents.values() for t in m.produces}
+    for m in reg.agents.values():
+        for t in m.needs:
+            if t in ARTIFACT_TYPES and t not in made:
+                problems.append(f"{m.name}: needs {t!r}, which no agent produces")
+    problems += _cycles(reg)
     if problems:
         raise ManifestError("; ".join(problems))
     return reg
+
+
+def _cycles(reg: Registry) -> list[str]:
+    """Agents wait on the artifacts others produce, so a loop in needs -> produces would deadlock the board before it starts."""
+    deps = {m.name: {p.name for t in m.needs for p in reg.producers(t) if p.name != m.name} for m in reg.agents.values()}
+    state: dict[str, int] = {}
+    out: list[str] = []
+
+    def visit(n: str, path: list[str]) -> None:
+        state[n] = 1
+        for d in sorted(deps[n]):
+            if state.get(d) == 1:
+                out.append("needs/produces cycle: " + " -> ".join([*path[path.index(d):], d] if d in path else [n, d]))
+            elif d not in state:
+                visit(d, [*path, d])
+        state[n] = 2
+    for n in deps:
+        if n not in state:
+            visit(n, [n])
+    return out
 
 
 def load(path: Path | str = DEFAULT_PATH, known_roles: Optional[set[str]] = None) -> Registry:

@@ -100,21 +100,22 @@ class Store:
         self.conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA busy_timeout=5000")
+        deadline = time.monotonic() + 5.0                       # one shared budget for the three setup steps, not 3 s each
         if not mem:
             # Two connections opening the same new file at once can get "database is locked" straight from the WAL switch
             # (SQLite does not always call the busy handler there), so setup retries briefly instead of failing the start.
-            self._retry_locked(lambda: self.conn.execute("PRAGMA journal_mode=WAL"))
+            self._retry_locked(lambda: self.conn.execute("PRAGMA journal_mode=WAL"), deadline)
             self.conn.execute("PRAGMA synchronous=NORMAL")      # safe with WAL; far fewer fsyncs under many short transactions
-        self._retry_locked(lambda: self.conn.executescript(SCHEMA))
-        self._retry_locked(self._migrate)
+        self._retry_locked(lambda: self.conn.executescript(SCHEMA), deadline)
+        self._retry_locked(self._migrate, deadline)
 
     @staticmethod
-    def _retry_locked(fn, tries: int = 60, pause: float = 0.05):
-        for i in range(tries):
+    def _retry_locked(fn, deadline: float, pause: float = 0.05):
+        while True:
             try:
                 return fn()
             except sqlite3.OperationalError as e:
-                if "locked" not in str(e).lower() or i == tries - 1:
+                if "locked" not in str(e).lower() or time.monotonic() >= deadline:
                     raise
                 time.sleep(pause)
 
@@ -189,7 +190,7 @@ class Store:
             ids = [r["id"] for r in self.conn.execute("SELECT id FROM chapters WHERE notebook_id=?", (nid,))]
             for cid in ids:
                 self.conn.execute("DELETE FROM blocks WHERE chapter_id=?", (cid,))
-            for t in ("chapters", "sources", "jobs", "quiz_attempts", "messages", "proposals", "chapter_revisions", "artifacts", "agent_messages", "decision_log"):
+            for t in ("decision_log", "agent_messages", "artifacts", "chapters", "sources", "jobs", "quiz_attempts", "messages", "proposals", "chapter_revisions"):
                 self.conn.execute(f"DELETE FROM {t} WHERE notebook_id=?", (nid,))
             self.conn.execute("DELETE FROM notebooks WHERE id=?", (nid,))
 

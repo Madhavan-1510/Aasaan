@@ -344,3 +344,82 @@ def test_deleting_a_notebook_removes_its_board_messages_and_decisions(parts):
     emitter.emit(nid, "critic", "planned", what="x")
     store.delete_notebook(nid)
     assert not board.list(nid) and bus.pending() == 0 and not emitter.recent(nid)
+
+
+# ------------------------------------------------------------------------------------------------ review fixes (PR #6)
+def test_a_message_is_received_by_exactly_one_reader_across_connections(tmp_path):
+    path = tmp_path / "rx.db"
+    reg = load_manifests()
+    Bus(Store(path), reg).send_many([dict(notebook_id="nb", frm="critic", to="teacher", type="Fixes", correlation_id=f"c{i}", payload={"i": i}) for i in range(40)])
+    got, errors = [], []
+
+    def reader():
+        try:
+            b = Bus(Store(path), reg)
+            while True:
+                rows = b.receive("teacher", limit=3)
+                if not rows:
+                    break
+                got.extend(m["id"] for m in rows)
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+    ts = [threading.Thread(target=reader) for _ in range(5)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errors and len(got) == 40 and len(set(got)) == 40          # nobody got a message twice
+
+
+def test_a_restart_refunds_the_interrupted_attempt(tmp_path, clock):
+    path = tmp_path / "rf.db"
+    reg = load_manifests()
+    board = Board(Store(path), reg, clock)
+    a = board.add("nb", "outline", owner_agent="architect")
+    board.claim("architect")
+    board.reap_expired()                                                    # nothing expired yet
+    assert Board(Store(path), reg, clock).recover_after_restart() == 1
+    assert board.get(a)["status"] == "ready" and board.get(a)["attempts"] == 0     # the crash did not use up a retry
+
+
+def test_detect_stuck_leaves_work_whose_dependencies_are_released(parts):
+    store, board, _, _, ref = parts
+    done = board.add("nb", "outline", owner_agent="architect")
+    with store.transaction(immediate=True):
+        store.conn.execute("UPDATE artifacts SET status='released' WHERE id=?", (done,))
+    waiting = board.add("nb", "notes", chapter_id=1, owner_agent="teacher", depends_on=[done])
+    with store.transaction(immediate=True):
+        store.conn.execute("UPDATE artifacts SET status='blocked' WHERE id=?", (waiting,))   # the readiness pass has not run yet
+    assert ref.detect_stuck("nb") == [] and board.get(waiting)["status"] == "ready"
+
+
+def test_decision_text_keeps_the_words_user_prompt_but_drops_a_pasted_prompt(parts):
+    _, _, _, emitter, _ = parts
+    ok = emitter.emit("nb", "teacher", "fixed", what="the user prompt example", reason_text="clearer wording")
+    assert "user prompt example" in ok["summary"] and ok["reason_text"] == "clearer wording"
+    bad = emitter.emit("nb", "teacher", "fixed", what="x", reason_text="system prompt: you are a secret agent")
+    assert "secret agent" not in bad["reason_text"]
+
+
+def test_manifests_need_a_producer_and_must_not_loop():
+    a = {"layer": 1, "model_role": "x"}
+    with pytest.raises(ManifestError, match="no agent produces"):
+        parse({"agents": {"a": {**a, "needs": ["outline"]}}})
+    with pytest.raises(ManifestError, match="cycle"):
+        parse({"agents": {"a": {**a, "needs": ["outline"], "produces": ["notes"]}, "b": {**a, "needs": ["notes"], "produces": ["outline"]}}})
+
+
+def test_an_unknown_release_gate_is_treated_as_the_strictest():
+    from app.orchestrator.manifests import Manifest, Registry
+    reg = Registry({"a": Manifest("a", 1, "x", produces=("notes",), release_gate="weird"), "b": Manifest("b", 1, "x", produces=("quiz",), release_gate="verified")})
+    assert reg.release_gate("notes") == "weird"                              # no crash, and it outranks the known gates
+
+
+def test_flags_and_missing_artifacts_fail_cleanly(parts):
+    store, board, _, _, ref = parts
+    a = board.add("nb", "notes", owner_agent="teacher")
+    with store.transaction(immediate=True):
+        store.conn.execute("UPDATE artifacts SET flags='[1,2]' WHERE id=?", (a,))     # a list where a dict belongs
+    assert board.get(a)["flags"] == {} and ref.allow_revision(a)
+    with pytest.raises(BoardError):
+        board.set_flag(999, x=1)
+    with pytest.raises(BoardError):
+        ref.allow_revision(999)

@@ -39,7 +39,7 @@ _SCRUB = [
     (re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/-]{8,}"), "[removed]"),
     (re.compile(r"(?i)\b[a-z]:\\[^\s]*"), "[removed]"),
     (re.compile(r"(?<![\w.])/(?:home|users|tmp|var|etc|usr|app|data)/[^\s]*", re.I), "[removed]"),
-    (re.compile(r"(?i)\b(?:system|user)\s*prompt\b.*"), "[removed]"),
+    (re.compile(r"(?i)\b(?:system|user)\s*prompt\s*[:=].*"), "[removed]"),      # a prompt being pasted in, not the words "user prompt"
 ]
 MAX_WORDS = 12
 
