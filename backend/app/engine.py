@@ -82,7 +82,7 @@ def search_topic(nb: dict) -> str:
 
 
 class Engine:
-    def __init__(self, store: Store, router: ModelRouter, upload_dir: str | Path = "data/uploads",
+    def __init__(self, store: Store, router: ModelRouter, upload_dir: Optional[str | Path] = None,
                  retry_delay_s: float = 4.0, tools: Optional[ToolRunner] = None):
         self.store, self.router = store, router
         self.tools = tools
@@ -90,6 +90,9 @@ class Engine:
             web.set_runner(tools)
         web.set_page_gate(lambda url, title, text: gates.page_health(router, url, title, text))   # page_health after each fetch tier
         self.voice = Voice(router)
+        if upload_dir is None:
+            from .settings import get_uploads_dir
+            upload_dir = get_uploads_dir()
         self.upload_dir = Path(upload_dir)
         self.retry_delay_s = retry_delay_s
 
