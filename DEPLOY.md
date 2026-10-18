@@ -152,3 +152,15 @@ Azure Container Apps (ACA) ingress cuts any HTTP connection exceeding 240 second
 - **Heartbeats**: The server emits `: keepalive` comments every 15 seconds to prevent intermediate reverse proxies from terminating idle connections.
 - **Monotonic IDs & Replay Buffer**: Events carry monotonic `id:` headers backed by a per-notebook bounded in-memory buffer. Reconnecting clients supplying `Last-Event-ID` (or `?last_event_id=`) resume missed updates in order with zero duplicates or gaps.
 - **Resync on Gap**: If a replica restarts or a client reconnects with an ID older than the buffer, the server sends `event: resync` instructing the client to refetch current state via `/api/notebooks/{nid}`.
+
+## Reverse Proxy Client IP & Rate Limiting
+
+On Azure Container Apps (ACA), the ingress Envoy proxy terminates client connections and **appends** the connecting client's IP to the `X-Forwarded-For` header. Because clients can send arbitrary `X-Forwarded-For` headers with forged leftmost entries, only the **rightmost** entry added by the trusted ingress platform is authoritative.
+
+- **Configurable Trust Model**: Controlled by `AASAAN_TRUSTED_PROXY_HOPS` (default: `1`):
+  - `0`: Trust no proxy headers; use socket peer IP directly.
+  - `1` (default): Trust 1 proxy hop from the right (exact match for ACA ingress and Caddy in Docker Compose).
+  - `N >= 1`: Takes the $N$-th entry from the right of `X-Forwarded-For`.
+- **Strict Parsing & Fallback**: Header entries are stripped of whitespace and quotes, ports/brackets are safely stripped (`1.2.3.4:5678` -> `1.2.3.4`, `[2001:db8::1]:80` -> `2001:db8::1`), and validated against Python's `ipaddress` library. Malformed entries or missing headers safely fall back to the socket peer IP without throwing exceptions.
+- **Uvicorn Flag Removal**: Uvicorn's `--proxy-headers` and `--forwarded-allow-ips "*"` flags have been removed. This prevents uvicorn from rewriting `request.client` based on spoofable leftmost values, centralizing all IP extraction in `get_client_ip(request)`.
+- **IPv6 Prefix Bucketing**: Rate limits bucket IPv6 addresses by `/64` network prefix rather than individual `/128` addresses, preventing users from evading limits by rotating IPv6 interface addresses within their assigned prefix.

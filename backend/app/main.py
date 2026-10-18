@@ -25,6 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from .security_headers import SecurityHeadersMiddleware
 from .sse import StreamHub
+from .client_ip import get_client_ip, get_rate_limit_key
 
 from .db import Store
 from .engine import Engine, UserError
@@ -200,7 +201,7 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         if token:
             if request.headers.get("x-admin-token") != token:
                 raise HTTPException(403, "admin token required")
-        elif (request.client.host if request.client else "") not in ("127.0.0.1", "::1", "testclient"):
+        elif get_client_ip(request) not in ("127.0.0.1", "::1", "testclient"):
             raise HTTPException(403, "internal endpoint: localhost only (set AASAAN_ADMIN_TOKEN to allow remote use)")
 
     # ================================================================ health
@@ -269,14 +270,14 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         language: str = Form("en"),
         files: list[UploadFile] = File(default=[]),
     ):
-        ip = request.client.host if request.client else "?"
+        rate_key = get_rate_limit_key(request)
         now = time.time()
-        recent = [t for t in creations.get(ip, []) if now - t < 3600]
+        recent = [t for t in creations.get(rate_key, []) if now - t < 3600]
         if len(recent) >= nb_per_hour:
             raise HTTPException(429, "You have created a lot of notebooks this hour. Please try again later.")
         data = [(f.filename or "file", f.content_type or "", await f.read()) for f in files if f is not None and f.filename]
         nid = await run_in_threadpool(engine.create_notebook, learner_id, text, language, data)
-        creations[ip] = recent + [now]
+        creations[rate_key] = recent + [now]
         return {"notebook_id": nid}
 
     @app.get("/api/notebooks/{nid}/cover.svg")
