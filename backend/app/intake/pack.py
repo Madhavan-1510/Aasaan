@@ -154,7 +154,7 @@ def build_source_pack(inputs: list[IntakeInput], goal: str = "", language: str =
         for i, (pg, text) in enumerate(zip(raw.pages, texts), start=1):
             ocr = pg.tier in ("indra-auto", "indra-ocr", "vision")
             if pg.text.strip():
-                h = page_health(text, pg.confidence, from_ocr=ocr, expected_script=expected if ocr else None)
+                h = page_health(pg.text, pg.confidence, from_ocr=ocr, expected_script=expected if ocr else None)    # judged on plain text: Markdown/HTML markup is not 'stray characters'
                 if not h.ok:
                     health[i] = h.reason
             pack["pages"].append(PageInfo(source_id=sid, page=i, tier=TIER_FOR.get(pg.tier, "none"), source_kind=pg.source_kind, confidence=pg.confidence,

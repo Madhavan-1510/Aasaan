@@ -6,6 +6,7 @@ reason that ends up in the quality report, so a page is never dropped or trusted
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
@@ -60,7 +61,14 @@ def ocr_supports(script: str) -> bool:
     return script in OCR_SUPPORTED
 
 
-_WORD = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
+def _is_letter(ch: str) -> bool:
+    """A letter, or a combining mark: Indic vowel signs are marks (category M), and `str.isalpha` and regex word characters skip them, which would split every Tamil word."""
+    return ch.isalpha() or unicodedata.category(ch).startswith("M")
+
+
+def words_in(text: str) -> list[str]:
+    """Tokens that contain at least two letters (marks count), in any script."""
+    return [tok for tok in re.split(r"[\s\.,;:!?()\[\]{}<>/\|\"'`~@#$%^&*+=_-]+", text) if sum(1 for ch in tok if _is_letter(ch)) >= 2]
 
 
 @dataclass(frozen=True)
@@ -75,8 +83,8 @@ def page_health(text: str, confidence: Optional[float] = None, *, from_ocr: bool
     t = (text or "").strip()
     if len(t) < MIN_CHARS:
         return Health(False, "There is almost no text on this page.", "empty")
-    letters = [c for c in t if c.isalpha()]
-    words = _WORD.findall(t)
+    letters = [c for c in t if _is_letter(c)]
+    words = words_in(t)
     if not letters or len(words) < 3:
         return Health(False, "The text on this page does not form words.", "not_words")
     if from_ocr:
