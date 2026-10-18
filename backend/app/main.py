@@ -311,6 +311,37 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.get("/api/dev/trace/{nid}")
+    def dev_trace(nid: str):
+        """Developer trace (AASAAN_TRACE=on only; never shown to learners): the board mirror, the agent messages, the technical events and every decision record."""
+        if os.environ.get("AASAAN_TRACE", "off").strip().lower() not in ("on", "1", "true", "yes"):
+            raise HTTPException(404, "not found")
+        engine._nb(nid)
+        sh = engine._shadow(nid)
+        board = sh.trace(nid) if sh else {"artifacts": [], "messages": [], "note": "AASAAN_ORCHESTRATOR is off for this notebook"}
+        return {**board, "events": store.events(300), "decisions": engine.decisions.recent(nid, limit=500)}
+
+    @app.get("/api/notebooks/{nid}/scope")
+    def scope(nid: str):
+        return engine.scope_view(nid)
+
+    @app.post("/api/notebooks/{nid}/scope")
+    def set_scope(nid: str, depth: Optional[str] = Form(None), level: Optional[str] = Form(None)):
+        """A scope change is a PROPOSAL (what would be rewritten, roughly how long); it is applied from the chat card. None = nothing to change."""
+        if depth not in (None, "", "quick", "standard", "deep") or level not in (None, "", "beginner", "intermediate", "advanced"):
+            raise HTTPException(400, "unknown depth or level")
+        return {"proposal": engine.propose_scope(nid, depth or None, level or None)}
+
+    @app.get("/api/notebooks/{nid}/review")
+    def review(nid: str, learner_id: str):
+        """A 5-minute spaced review from what this learner got wrong or is weak at (empty when nothing is weak)."""
+        return {"summary": engine.review_summary(learner_id, nid), "questions": engine.review_items(learner_id, nid)}
+
+    @app.get("/api/notebooks/{nid}/decisions")
+    def decisions(nid: str, since: int = 0, chapter_id: Optional[int] = None, agent: Optional[str] = None, severity: Optional[str] = None):
+        """The Activity feed: what each agent decided and what came out of it, in plain words. Replays from `since` (0 = everything)."""
+        return engine.decisions_view(nid, since, chapter_id, agent, severity)
+
     # ---- chat thread
     @app.get("/api/notebooks/{nid}/messages")
     def messages(nid: str, after: int = 0):
@@ -371,7 +402,7 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
 
     @app.post("/api/notebooks/{nid}/chat")
     async def chat(nid: str, learner_id: str = Form(...), text: str = Form(""), chapter_id: Optional[int] = Form(None), block_ids: str = Form(""),
-                   files: list[UploadFile] = File(default=[])):
+                   mode: str = Form("answer"), files: list[UploadFile] = File(default=[])):
         """One chat turn as a server-sent stream: `user` (stored), `status`, `delta` pieces of the validated answer, `done` (stored, with chips).
         The answer is validated against the sources BEFORE it is shown, so it streams from the checked text, not from raw model tokens."""
         engine._nb(nid)
@@ -401,7 +432,7 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
                     yield ev("done", {"id": None, "refs": []})
                     return
                 yield ev("status", {"text": "Thinking…"})
-                res = await run_in_threadpool(engine.handle_chat, nid, learner_id, question, chapter_id, blocks)
+                res = await run_in_threadpool(engine.handle_chat, nid, learner_id, question, chapter_id, blocks, "guide" if mode == "guide" else "answer")
                 if res["type"] == "proposal":      # a card with Apply and Dismiss: nothing has changed yet
                     p = res["proposal"]
                     yield ev("proposal", {"id": p["message_id"], "proposal": {k: v for k, v in p.items() if k != "message_id"}, "content": p["summary"]})
