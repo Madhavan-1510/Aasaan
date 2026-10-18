@@ -104,6 +104,10 @@ class DecisionEmitter:
             cb(rec)
         return rec
 
+    def last_id(self, notebook_id: str) -> int:
+        r = self.store._one("SELECT COALESCE(MAX(id), 0) AS n FROM decision_log WHERE notebook_id=?", (notebook_id,))
+        return int(r["n"])
+
     @staticmethod
     def _row(r) -> dict:
         d = dict(r)

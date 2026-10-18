@@ -25,6 +25,8 @@ from . import web
 from .agents import architect, companion, critic, curator, diagnoser, doubt, gates, illustrator, intake, quizzer, rewriter, teacher
 from .agents.common import overlap, tokens
 from . import coverage
+from .orchestrator.decisions import DecisionEmitter
+from .tools import current_notebook
 from .db import Store
 from . import edits
 from .tools import ToolRunner
@@ -92,8 +94,37 @@ class Engine:
             web.set_runner(tools)
         web.set_page_gate(lambda url, title, text: gates.page_health(router, url, title, text))   # page_health after each fetch tier
         self.voice = Voice(router)
+        self.decisions = DecisionEmitter(store)
+        if getattr(router, "sink", None) is not None:
+            router.sink.hook = self._router_event
         self.upload_dir = Path(upload_dir)
         self.retry_delay_s = retry_delay_s
+
+    # ================================================================= activity feed
+    def _dec(self, nid: str, agent: str, kind: str, what: str, **kw) -> None:
+        """One plain-language decision record for the learner's Activity feed. Never raises: the feed must not break a build."""
+        try:
+            self.decisions.emit(nid, agent, kind, what=what, **kw)
+        except Exception:  # noqa: BLE001
+            pass
+
+    _FEED_AGENTS = {"intake": "intake", "architect": "architect", "curator": "curator", "teacher": "teacher", "critic": "critic", "quizzer": "quizzer",
+                    "illustrator": "illustrator", "doubt": "doubt", "editor": "editor", "diagnoser": "diagnoser", "rewriter": "rewriter", "scoper": "scoper"}
+
+    def _router_event(self, agent: str, provider: str, status: str, summary: str, error: str) -> None:
+        """A model or tool fell back, retried or failed: say so calmly. No model name, no raw error text: only a fixed reason."""
+        nid = current_notebook.get()
+        if not nid or status not in ("fallback", "retry", "failed"):
+            return
+        who = self._FEED_AGENTS.get(agent.split(":")[0].split(".")[0], "referee")
+        limit = bool(re.search(r"429|rate|quota|too many", error or "", re.I))
+        bucket = int(time.time() // 30)                                  # at most one record per agent and status every 30 s
+        self._dec(nid, who, "fell_back", "this step", reason_code="rate_limited" if limit else "backup_model", outcome="failed" if status == "failed" else "partial",
+                  severity="warning" if status == "failed" else "notice", dedupe_key=f"ev|{nid}|{who}|{status}|{bucket}")
+
+    def decisions_view(self, nid: str, since: int = 0, chapter_id: Optional[int] = None, agent: Optional[str] = None, severity: Optional[str] = None) -> dict:
+        self._nb(nid)
+        return {"decisions": self.decisions.recent(nid, since_id=since, chapter_id=chapter_id, agent=agent, severity=severity)}
 
     # ================================================================= helpers
     def profile(self, learner_id: str, nb: Optional[dict] = None) -> LearnerProfile:
@@ -292,6 +323,7 @@ class Engine:
         self.store.update_notebook(nid, title=out.title[:80], description=out.description, level=out.level,
                                    goal=nb["goal"] or out.title)
         self.say(nid, f"The outline is ready: {len(out.chapters)} chapters. I'm writing chapter 1 first.", key="outline")
+        self._dec(nid, "architect", "planned", f"{len(out.chapters)} chapters", counts={"chapters": len(out.chapters)}, dedupe_key=f"outline|{nid}")
         self._check_coverage(nid, chunks)
         self._source_books(nid, self._nb(nid))
 
@@ -919,6 +951,8 @@ class Engine:
         own = self._chapter_chunks(ch, all_chunks)
 
         res = curator.curate(self.router, self.store, ch["title"], ch["objectives"], search_topic(nb), nb["language"])
+        self._dec(nb["id"], "curator", "chose", f"resources for chapter {ch['position']}", chapter_id=cid,
+                  counts={"videos": len(res.videos), "links": len(res.links), "images": len(res.images)}, dedupe_key=f"curate|{cid}|{int(time.time() // 5)}")
         page_chunks = [{"chunk_id": p["chunk_id"], "page": 1, "text": p["text"], "source_id": "web"} for p in res.pages]
         chunks = own + page_chunks
         link_refs = [{"ref": f"url:{c.url}", "title": c.title, "source": c.source, "kind": c.kind} for c in res.links + res.videos]
@@ -983,6 +1017,16 @@ class Engine:
                 "page_chunks": page_chunks, "curator_notes": res.notes,
                 "review_issues": [] if verified else self._claim_rows(open_points, chunks, allowed_extra)}
         self.store.replace_blocks(cid, blocks, "ready", meta)
+        nid_ = nb["id"]
+        self._dec(nid_, "teacher", "accepted", f"notes for chapter {ch['position']}", chapter_id=cid, counts={"words": len(content.notes_md.split())},
+                  dedupe_key=f"notes|{cid}|{int(time.time() // 5)}")
+        if revisions:
+            self._dec(nid_, "critic", "fixed", f"chapter {ch['position']}", chapter_id=cid, counts={"revisions": revisions}, reason_text="the Critic sent claims back to the Teacher",
+                      dedupe_key=f"fix|{cid}|{int(time.time() // 5)}")
+        self._dec(nid_, "critic", "accepted" if verified else "stopped", f"chapter {ch['position']}" + ("" if verified else " as unverified"), chapter_id=cid,
+                  reason_code=None if verified else "loop_limit", outcome="ok" if verified else "partial", severity="info" if verified else "notice",
+                  dedupe_key=f"verdict|{cid}|{int(time.time() // 5)}")
+        self._dec(nid_, "quizzer", "accepted", f"{len(quiz.questions)} quiz questions", chapter_id=cid, counts={"questions": len(quiz.questions)}, dedupe_key=f"quiz|{cid}|{int(time.time() // 5)}")
         self._announce_chapter(ch, verified)
         if verified:
             self.store.cache_set(teacher.content_cache_key(ch, prof.language), content.model_dump())
@@ -1121,7 +1165,7 @@ class Engine:
                 "preparing": {"ready": sum(1 for c in chs if c["status"] == "ready"), "total": len(chs),
                               "pct": round(100 * sum(1 for c in chs if c["status"] == "ready") / len(chs)) if chs else 0,
                               "complete": bool(chs) and all(c["status"] == "ready" for c in chs)},
-                "progress": {"done": done, "total": len(chs)}, "message_seq": self.store.last_message_id(nid), **edits.snapshot_info(self.store, nid), "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
+                "progress": {"done": done, "total": len(chs)}, "message_seq": self.store.last_message_id(nid), "decision_seq": self.decisions.last_id(nid), **edits.snapshot_info(self.store, nid), "warnings": [w for w in (self.store.cache_get(f"nbwarn:{nid}") or []) if not re.match(r"page \d+ unreadable or empty$", w)],
                 "source_issues": [{"source_id": s["id"], "title": s["title"], "status": s["meta"].get("status", "ready"), "pages_total": s["meta"].get("pages_total"),
                                    "pages_read": s["meta"].get("pages_read"), "issues": s["meta"].get("issues", [])}
                                   for s in self.store.sources(nid) if (s["meta"] or {}).get("issues")],
