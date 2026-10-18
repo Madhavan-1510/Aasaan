@@ -35,6 +35,8 @@ Fill in `.env`:
 | Variable | Needed | Notes |
 |---|---|---|
 | `GEMINI_API_KEY` | **yes** | Google AI Studio. Without it the app shows "No AI model is connected" and cannot build notebooks. |
+| `AASAAN_DB` | optional | SQLite database path. Default: `data/aasaan.db` (in container: `/app/data/aasaan.db`; on ACA: `/app/local/aasaan.db`). Parent dir created on start. |
+| `AASAAN_UPLOADS` | optional | Uploads directory path. Default: `data/uploads` (in container: `/app/data/uploads`; on ACA: `/mnt/files`). Created on start. |
 | `AASAAN_DOMAIN` | yes (prod) | Your domain, e.g. `aasaan.example.com`. Unset = `localhost`. |
 | `AASAAN_ADMIN_TOKEN` | **yes (prod)** | Long random string. Protects `/api/events` and `/api/admin/*`. Without it those are localhost-only. |
 | `SARVAM_API_KEY` | optional | Indian-language chat, voice, translation. |

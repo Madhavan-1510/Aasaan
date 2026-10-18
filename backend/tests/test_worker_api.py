@@ -177,7 +177,7 @@ def test_notebook_jobs_sort_before_chapter_jobs(engine, store):
 def test_without_a_model_key_the_app_says_so_and_refuses_to_build(tmp_path):
     """There is no demo mode: no key means a clear message, not placeholder content."""
     with TestClient(create_app(db_path=str(tmp_path / "nokey.db"), start_worker=False)) as c:
-        assert c.get("/health").json()["model_ready"] is False
+        assert c.get("/api/health").json()["model_ready"] is False
         lid = c.post("/api/learners").json()["learner_id"]
         r = c.post("/api/notebooks", data={"learner_id": lid, "text": "Teach me binary search", "language": "en"})
         assert r.status_code == 400 and "GEMINI_API_KEY" in r.text

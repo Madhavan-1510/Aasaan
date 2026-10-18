@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS chapter_revisions(
   id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id TEXT, chapter_id INTEGER, proposal_id INTEGER, kind TEXT, snapshot TEXT, created_at REAL);
 CREATE INDEX IF NOT EXISTS ix_revisions_prop ON chapter_revisions(proposal_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_key ON messages(notebook_id, key) WHERE key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS _health(id INTEGER PRIMARY KEY, ts REAL);
 CREATE TABLE IF NOT EXISTS artifacts(
   id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id TEXT NOT NULL, chapter_id INTEGER, type TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL, owner_agent TEXT, payload TEXT, depends_on TEXT, flags TEXT,
@@ -92,10 +93,14 @@ def _l(s: Optional[str], default: Any = None) -> Any:
 
 
 class Store:
-    def __init__(self, path: str | Path = ":memory:"):
+    def __init__(self, path: Optional[str | Path] = None):
+        if path is None:
+            from .settings import get_db_path
+            path = get_db_path()
         mem = str(path) == ":memory:"
         if not mem:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         self._lock = threading.RLock()
         self.conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -118,6 +123,21 @@ class Store:
                 if "locked" not in str(e).lower() or time.monotonic() >= deadline:
                     raise
                 time.sleep(pause)
+
+    def check_writable(self) -> tuple[bool, str]:
+        """Confirm database is writable by performing a write inside a transaction that is rolled back."""
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.execute("INSERT OR REPLACE INTO _health(id, ts) VALUES(1, ?)", (time.time(),))
+                self.conn.execute("ROLLBACK")
+                return True, "ok"
+            except Exception:
+                try:
+                    self.conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                return False, "database is not writable"
 
     def _migrate(self) -> None:
         """Additive column migrations for databases created by an earlier version."""
