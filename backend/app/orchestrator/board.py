@@ -36,6 +36,7 @@ TRANSITIONS = {
 AGENT_MOVES = {("claimed", "drafted"), ("claimed", "failed"), ("claimed", "ready"), ("drafted", "checking"), ("drafted", "ready"),
                ("checking", "approved"), ("checking", "drafted"), ("checking", "failed")}
 DEFAULT_LEASE_S = 120
+MAX_REFUNDS = 2
 
 
 class BoardError(RuntimeError):
@@ -84,6 +85,11 @@ class Board:
         deps = list(depends_on)
         t = self.now()
         with self.store.transaction(immediate=True):
+            if deps:
+                marks = ",".join("?" * len(set(deps)))
+                have = {r["id"] for r in self.store.conn.execute(f"SELECT id FROM artifacts WHERE id IN ({marks})", tuple(set(deps))).fetchall()}
+                if have != set(deps):
+                    raise BoardError(f"depends_on names artifact(s) that do not exist: {sorted(set(deps) - have)}")
             status = "ready" if self._deps_met(deps) else "blocked"
             cur = self.store.conn.execute(
                 "INSERT INTO artifacts(notebook_id,chapter_id,type,version,status,owner_agent,payload,depends_on,flags,priority,created_at,updated_at)"
@@ -164,14 +170,17 @@ class Board:
                                           (self.now() + lease_s, self.now(), aid, agent))
             return cur.rowcount == 1
 
-    def reap_expired(self) -> list[dict]:
+    def reap_expired(self, notebook_id: Optional[str] = None) -> list[dict]:
         """Claims whose lease ran out go back to `ready`, or to `failed` once the manifest's retries are spent. Returns what moved.
         `max_retries` counts retries AFTER the first attempt: with max_retries=1 a task gets two attempts (attempts=1 -> ready, attempts=2 -> failed).
         An expired claim is not reclaimed until this runs (the referee tick does it), so it still counts against nobody's concurrency cap."""
         out: list[dict] = []
         t = self.now()
         with self.store.transaction(immediate=True):
-            for r in self.store.conn.execute("SELECT * FROM artifacts WHERE status='claimed' AND lease_until<=?", (t,)).fetchall():
+            sql, args = "SELECT * FROM artifacts WHERE status='claimed' AND lease_until<=?", [t]
+            if notebook_id:
+                sql, args = sql + " AND notebook_id=?", args + [notebook_id]
+            for r in self.store.conn.execute(sql, tuple(args)).fetchall():
                 retries = self.registry.get(r["claimed_by"]).max_retries if self.registry and r["claimed_by"] in self.registry.agents else 1
                 spent = r["attempts"] > retries
                 to = "failed" if spent else "ready"
@@ -182,10 +191,18 @@ class Board:
         return out
 
     def recover_after_restart(self) -> int:
-        """On start, nothing is really running: every claim returns to `ready`. The interrupted attempt is refunded (a restart is not the task's fault)."""
+        """On start, nothing is really running: every claim returns to `ready`. The interrupted attempt is refunded (a restart is not the task's fault),
+        but at most MAX_REFUNDS times per task, so a task that itself crashes the worker still runs out of retries instead of looping forever."""
         with self.store.transaction(immediate=True):
-            return self.store.conn.execute(
-                "UPDATE artifacts SET status='ready', claimed_by=NULL, lease_until=NULL, attempts=MAX(attempts-1, 0), updated_at=? WHERE status='claimed'", (self.now(),)).rowcount
+            rows = self.store.conn.execute("SELECT id, attempts, flags FROM artifacts WHERE status='claimed'").fetchall()
+            for r in rows:
+                flags = _flags(r["flags"])
+                refunds = int(flags.get("restart_refunds", 0))
+                refund = 1 if refunds < MAX_REFUNDS else 0
+                flags["restart_refunds"] = refunds + 1
+                self.store.conn.execute("UPDATE artifacts SET status='ready', claimed_by=NULL, lease_until=NULL, attempts=MAX(attempts-?, 0), flags=?, updated_at=? WHERE id=?",
+                                        (refund, _j(flags), self.now(), r["id"]))
+            return len(rows)
 
     # ------------------------------------------------------------------ transitions
     def transition(self, aid: int, to: str, actor: str, *, payload: Any = None, error: Optional[str] = None, expect: Optional[str] = None) -> bool:
@@ -225,15 +242,19 @@ class Board:
     def revise(self, aid: int, actor: str, payload: Any) -> int:
         """A fix landed (Critic -> Teacher): replace the payload in place, bump the version, and put the artifact back to `drafted`."""
         with self.store.transaction(immediate=True):
-            r = self.store.conn.execute("SELECT status, version FROM artifacts WHERE id=?", (aid,)).fetchone()
+            r = self.store.conn.execute("SELECT status, version, claimed_by FROM artifacts WHERE id=?", (aid,)).fetchone()
             if r is None or r["status"] not in ("checking", "drafted", "claimed"):
                 raise StaleTransition(f"artifact {aid} cannot be revised in state {r['status'] if r else 'missing'}")
+            if r["status"] == "claimed" and actor != REFEREE and r["claimed_by"] != actor:
+                raise PermissionError(f"artifact {aid} is claimed by {r['claimed_by']}, not {actor}")
             self.store.conn.execute("UPDATE artifacts SET payload=?, version=version+1, status='drafted', claimed_by=NULL, lease_until=NULL, updated_at=? WHERE id=?",
                                     (_j(payload), self.now(), aid))
             return int(r["version"]) + 1
 
-    def patch_released(self, aid: int, payload: Any, flags: Optional[dict] = None) -> int:
+    def patch_released(self, aid: int, payload: Any, flags: Optional[dict] = None, actor: str = "") -> int:
         """Referee only (callers go through Referee.upgrade_released): patch a released artifact in place, e.g. Critic fixes, and bump the version."""
+        if actor != REFEREE:
+            raise PermissionError("only the referee patches a released artifact")
         with self.store.transaction(immediate=True):
             r = self.store.conn.execute("SELECT status, version, flags FROM artifacts WHERE id=?", (aid,)).fetchone()
             if r is None or r["status"] != "released":
