@@ -76,6 +76,7 @@ unhealthy: `docker compose logs app`.
 
 ## Backups
 
+### Docker Compose
 The `backup` service writes `./backups/aasaan-YYYY-MM-DD.db` (SQLite online backup, safe while running) at start and
 every 24 hours, and deletes backups older than 14 days. Copy that folder off the server regularly.
 
@@ -89,6 +90,22 @@ docker compose start app
 ```
 
 (The volume name is `<project folder>_aasaan-data`; check with `docker volume ls`.)
+
+### Azure Container Apps (ACA) & Multi-Container Deployments
+On Azure Container Apps, the live SQLite database runs on an EmptyDir local volume (`/app/local/aasaan.db`) and backups persist to an Azure Files share (`/mnt/files/backups`).
+
+1. **Pre-start Restore (`python -m app.restore`)**:
+   - Runs as an init container before the app container starts.
+   - If `/app/local/aasaan.db` already exists, it skips restore and exits 0.
+   - If empty, it inspects `/mnt/files/backups`, verifies `PRAGMA integrity_check` on candidate backups (newest first), atomically copies the newest valid backup to `/app/local/aasaan.db`, and purges any stale `-wal` or `-shm` sidecars.
+   - If no backups exist (initial deployment), it starts clean and exits 0.
+
+2. **Continuous Online Backup (`python -m app.backup_loop`)**:
+   - Runs as a sidecar or scheduled container.
+   - Executes `Connection.backup` online copies into `/mnt/files/backups/aasaan-YYYY-MM-DD-HHMM.db.tmp`, runs `PRAGMA integrity_check`, and atomically renames valid backups to `.db`.
+   - Prunes backups older than `AASAAN_BACKUP_KEEP_DAYS` (default: 14 days), while unconditionally keeping the newest 3 valid backups.
+   - Configurable via `AASAAN_BACKUP_DIR`, `AASAAN_BACKUP_EVERY_MIN` (default: 5), and `AASAAN_BACKUP_KEEP_DAYS` (default: 14).
+   - Also exposes `run_backup_once()` for programmatic or admin endpoint triggers.
 
 ## Updating
 
