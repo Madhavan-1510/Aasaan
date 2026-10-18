@@ -17,6 +17,8 @@ python scripts/acceptance.py                                                    
 ```
 
 - **`GEMINI_API_KEY` in `.env` is required.** Copy `.env.example` and fill it in. Other keys (Sarvam, Jev, YouTube, ...) are optional.
+- **Configurable paths:** SQLite path defaults to `data/aasaan.db` (override with `AASAAN_DB`), and uploads default to `data/uploads` (override with `AASAAN_UPLOADS`). Directories are created automatically on startup with write verification.
+- **Health endpoints:** `GET /health` provides a lightweight liveness probe (`{"ok": true}`), `GET /health/ready` verifies database writability, and `GET /api/health/models` verifies model connectivity.
 - **No key:** the app starts, shows a banner ("No AI model is connected"), and refuses to build notebooks. There is no demo or mock mode.
 - **Tests** (`pytest backend/tests`) never call a real model: they inject a test double (`backend/tests/fake_provider.py`).
 - **Check your models:** `GET /api/health/models` calls each configured model once and reports `ok` or `failed` with the error.
