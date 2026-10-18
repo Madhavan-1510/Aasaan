@@ -186,6 +186,8 @@ class CriticOut(Strict):
     verdict: Literal["approve", "revise", "reject"]
     issues: list[CriticIssue] = Field(default_factory=list)
     confidence: float = 0.5
+    claims_total: Optional[int] = None      # set by code (not the model): how many claim sentences the notes made...
+    claims_flagged: Optional[int] = None    # ...and how many the sources did not support (None when the gate could not run)
 
     @model_validator(mode="after")
     def _check(self):

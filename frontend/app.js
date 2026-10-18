@@ -439,7 +439,9 @@ function renderChapter() {
     ${next ? `<button class="btn ghost" data-go="${next.id}">${esc(next.title.slice(0, 28))} ${ICON.right}</button>` : ""}</nav>`;
   if (ch.status !== "ready") { main.innerHTML = head + skeleton(ch) + nav; wireNav(main); return; }
   const issues = ch.review_issues || [];
-  const notices = [ch.unverified ? `<div class="flag"><p>A few claims couldn't be fully verified.</p>
+  const cl = ch.claims;
+  const verifiedLine = cl && cl.total ? `<p class="claimline ${ch.unverified ? "partial" : "ok"}" role="status">${ch.unverified ? `Checked ${cl.verified} of ${cl.total} claims. The rest could not be verified.` : `Verified ${cl.verified} of ${cl.total} claims.`}</p>` : "";
+  const notices = [verifiedLine, ch.unverified ? `<div class="flag"><p>A few claims couldn't be fully verified.</p>
       <div class="flag-actions">${issues.length ? `<button class="linkbtn" id="seeclaims" aria-expanded="false">See which claims</button>` : ""}<button class="linkbtn" id="recheck">Re-check</button></div>
       <ul class="claims" id="claims" hidden>${issues.map((i) => `<li>${esc(i.claim)} <span class="muted">(${esc(i.source_status)})</span></li>`).join("")}</ul></div>` : "",
                    !ch.grounded ? `<p class="flag">Written from general knowledge; no source material was supplied.</p>` : "",

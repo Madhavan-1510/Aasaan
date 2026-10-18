@@ -959,6 +959,7 @@ class Engine:
         allowed_extra = {l["ref"] for l in link_refs}
 
         issues, previous, content, verified, revisions, open_points = None, None, None, False, 0, []
+        claims_total = claims_flagged = None
         quiz_future = None
         dprof = depth_mod.profile(self.store, nb["id"])
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -968,6 +969,7 @@ class Engine:
                 # the quiz is written while the Critic checks this draft (saves a full round trip on the happy path)
                 quiz_future = pool.submit(quizzer.run, self.router, ch, content, chunks, prof, self.store)
                 review: CriticOut = critic.run(self.router, content, chunks, prof, allowed_extra).value
+                claims_total, claims_flagged = review.claims_total, review.claims_flagged
                 if review.verdict == "approve":
                     verified = True
                     break
@@ -1028,6 +1030,7 @@ class Engine:
         blocks.append({"type": "quiz", "content": {"questions": [q.model_dump() for q in quiz.questions]}})
         blocks.append({"type": "summary", "content": {"text": content.summary, "key_points": content.key_points}})
         meta = {**ch["meta"], "unverified": not verified, "grounded": bool(chunks), "revisions": revisions, "readability": read_meta, "depth": dprof["name"],
+                "claims": ({"total": claims_total, "verified": claims_total - (0 if verified else (claims_flagged or 0))} if claims_total is not None else None),
                 "common_mistakes": content.common_mistakes,
                 "page_chunks": page_chunks, "curator_notes": res.notes,
                 "review_issues": [] if verified else self._claim_rows(open_points, chunks, allowed_extra)}
@@ -1222,7 +1225,8 @@ class Engine:
         return {"id": cid, "notebook_id": nb["id"], "title": ch["title"], "summary": ch["summary"], "objectives": ch["objectives"],
                 "status": ch["status"], "state": self._state(ch), "learning": self._learning(ch), "generation": self._generation(ch),
                 "kind": ch["kind"], "error": ch["error"], "review_issues": meta.get("review_issues", []),
-                "blocks": out_blocks, "unverified": bool(meta.get("unverified")), "grounded": meta.get("grounded", True),
+                "blocks": out_blocks, "unverified": bool(meta.get("unverified")), "grounded": meta.get("grounded", True), "claims": meta.get("claims"),
+                "patched_blocks": meta.get("patched_blocks", []),
                 "curator_notes": meta.get("curator_notes", []), "completed": ch["completed"]}
 
     def open_chapter(self, cid: int) -> None:
