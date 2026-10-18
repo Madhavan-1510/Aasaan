@@ -238,6 +238,8 @@ figure { margin: 0; } figcaption { font-size: .85rem; color: var(--muted); margi
 #dans { margin-top: 10px; }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 30px); background: var(--primary); color: var(--primary-fg); padding: 10px 16px; border-radius: 12px; opacity: 0; pointer-events: none; transition: all .25s; max-width: 90vw; z-index: 20; font-size: .92rem; }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
+#reconnecting-badge { position: fixed; top: 16px; right: 16px; background: var(--card); border: 1px solid var(--line); color: var(--muted); padding: 6px 14px; border-radius: 999px; opacity: 0; pointer-events: none; transition: opacity .25s; font-size: .85rem; font-weight: 500; z-index: 50; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+#reconnecting-badge.on { opacity: 1; }
 
 /* phones: one column, collapsible chapter list */
 @media (max-width: 860px) {
