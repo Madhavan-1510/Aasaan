@@ -454,7 +454,7 @@ function renderChapter() {
                    !ch.grounded ? `<p class="flag">Written from general knowledge; no source material was supplied.</p>` : "",
                    ...(ch.curator_notes || []).map((n) => `<p class="flag">${esc(n)}</p>`)].join("");
   main.innerHTML = head + notices + ch.blocks.map(blockWithAsk).join("") + doubtHtml() + nav;
-  wireNav(main); wireBlocks(main); wireClaims(main); wireAsk(main);
+  wireNav(main); wireBlocks(main); wireClaims(main); wireAsk(main); wireFlow(main);
 }
 
 function skeleton(ch) {
@@ -489,7 +489,9 @@ function blockHtml(b) {
       <figcaption>${esc(c.title)} · ${esc(a.author || "Unknown")} · ${esc(a.license || "")} · <a href="${esc(a.page_url || c.url)}" target="_blank" rel="noopener noreferrer">${esc(a.source || "source")}</a></figcaption></figure></section>`; }
     case "visual": {
       const a = c.attribution, p = c.payload || {};
-      const body = p.svg ? `<div class="vz-wrap" role="img" aria-label="${esc(c.alt_text)}">${p.svg}</div>`
+      const lv = p.levels ? `<div class="vz-tabs" role="group" aria-label="Detail level">${["high", "detailed"].filter((k) => p.levels[k]).map((k) => `<button type="button" data-lv="${k}" aria-pressed="${k === p.level}">${k === "high" ? "High level" : "Detailed"}</button>`).join("")}</div>` : "";
+      const codeBox = p.code ? `<details class="vz-codewrap"><summary>Show the code</summary><pre class="vz-code">${p.code.split("\n").map((l, i) => `<span class="cl" data-l="${i + 1}">${esc(l) || " "}</span>`).join("\n")}</pre></details>` : "";
+      const body = p.svg ? `${lv}<div class="vz-wrap" role="img" aria-label="${esc(c.alt_text)}">${p.svg}</div>${codeBox}`
         : `<img src="${esc(p.url)}" alt="${esc(c.alt_text)}" loading="lazy" referrerpolicy="no-referrer">`;
       const credit = a ? ` · ${esc(a.author || "Unknown")} · ${esc(a.license || "")} · <a href="${esc(a.page_url || p.url)}" target="_blank" rel="noopener noreferrer">${esc(a.source || "source")}</a>` : "";
       return `<section class="blk"><figure class="img visual">${body}<figcaption>${esc(c.caption)}${credit}</figcaption></figure></section>`; }
@@ -504,6 +506,20 @@ function blockHtml(b) {
 function doubtHtml() {
   return `<section class="blk"><div class="blk-h"><h3>Ask a doubt</h3></div><div class="doubt-row"><input id="dq" placeholder="Type your doubt and press Enter" aria-label="Your doubt">
     <button class="iconbtn" id="dmic" aria-label="Ask by voice">${ICON.mic}</button></div><div id="dans"></div></section>`;
+}
+
+// code flowcharts: High level / Detailed toggle, and a node lights up the code lines it stands for
+function wireFlow(main) {
+  main.querySelectorAll(".vz-tabs").forEach((tabs) => {
+    const sec = tabs.closest("section"), blk = S.chapter.blocks.find((b) => String(b.id) === sec?.dataset.bid);
+    const pl = blk?.content?.payload; if (!pl?.levels) return;
+    const wrap = sec.querySelector(".vz-wrap"); let level = pl.level;
+    const clear = () => sec.querySelectorAll(".cl.hl").forEach((l) => l.classList.remove("hl"));
+    const light = (id) => { clear(); const r = pl.levels[level].lines[id]; if (!r) return; sec.querySelector(".vz-codewrap")?.setAttribute("open", ""); sec.querySelectorAll(".cl").forEach((l) => { const n = Number(l.dataset.l); if (n >= r[0] && n <= r[1]) l.classList.add("hl"); }); };
+    const wireNodes = () => wrap.querySelectorAll(".fn").forEach((g) => { g.tabIndex = 0; g.onmouseenter = g.onfocus = () => light(g.dataset.n); g.onmouseleave = g.onblur = clear; });
+    tabs.querySelectorAll("button").forEach((b) => b.onclick = () => { level = b.dataset.lv; wrap.innerHTML = pl.levels[level].svg; tabs.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); clear(); wireNodes(); });
+    wireNodes();
+  });
 }
 
 function wireNav(main) {
