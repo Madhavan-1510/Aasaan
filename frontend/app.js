@@ -570,14 +570,16 @@ function editNotes(bid) {
 function renderSlides(b) {
   const el = document.getElementById("sl-" + b.id); if (!el) return;
   const cards = b.content.cards, i = Math.min(S.slide[b.id] || 0, cards.length - 1), c = cards[i];
-  el.innerHTML = `<div class="slide"><span class="badge">Slide ${i + 1} of ${cards.length}</span><h4>${esc(c.title)}</h4>
-    <ul>${c.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>
-    <div class="slide-nav"><button class="iconbtn" data-d="-1" aria-label="Previous slide" ${i === 0 ? "disabled" : ""}>${ICON.left}</button>
+  const TYPE = { title: "Objectives", concept: "Concept", example: "Example", diagram: "Diagram", comparison: "Comparison", code: "Code", mistake: "Common mistake", recap: "Recap", check: "Check yourself" };
+  el.innerHTML = `<div class="slide ${c.type ? "t-" + c.type : ""}"><span class="badge">Slide ${i + 1} of ${cards.length}${c.type && TYPE[c.type] ? ` · ${TYPE[c.type]}` : ""}</span><h4>${esc(c.title)}</h4>
+    <ul>${c.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>${c.note ? `<details class="slide-note"><summary>Speaker notes</summary><p>${esc(c.note)}</p></details>` : ""}</div>
+    <div class="slide-nav"><button class="iconbtn" data-full aria-label="Full screen" title="Full screen">${ICON.expand}</button><button class="iconbtn" data-d="-1" aria-label="Previous slide" ${i === 0 ? "disabled" : ""}>${ICON.left}</button>
       <span class="dotrow">${cards.map((_, k) => `<i class="${k === i ? "on" : ""}"></i>`).join("")}</span>
       <button class="iconbtn" data-d="1" aria-label="Next slide" ${i === cards.length - 1 ? "disabled" : ""}>${ICON.right}</button></div>`;
   const go = (d) => { S.slide[b.id] = Math.max(0, Math.min(cards.length - 1, i + d)); renderSlides(b); document.getElementById("sl-" + b.id)?.focus(); };
   el.querySelectorAll("[data-d]").forEach((x) => x.onclick = () => go(Number(x.dataset.d)));
-  el.onkeydown = (e) => { if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1); };
+  el.onkeydown = (e) => { if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1); else if (e.key === "f" || e.key === "F") el.requestFullscreen?.(); };
+  el.querySelector("[data-full]").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.());
 }
 
 // --- quiz: one question at a time, hint first, misconception feedback, marks, a mascot that reacts, then the course may change
