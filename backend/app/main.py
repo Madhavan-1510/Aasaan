@@ -247,6 +247,11 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.get("/api/notebooks/{nid}/decisions")
+    def decisions(nid: str, since: int = 0, chapter_id: Optional[int] = None, agent: Optional[str] = None, severity: Optional[str] = None):
+        """The Activity feed: what each agent decided and what came out of it, in plain words. Replays from `since` (0 = everything)."""
+        return engine.decisions_view(nid, since, chapter_id, agent, severity)
+
     # ---- chat thread
     @app.get("/api/notebooks/{nid}/messages")
     def messages(nid: str, after: int = 0):

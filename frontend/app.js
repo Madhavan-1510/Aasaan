@@ -5,6 +5,7 @@ import { renderMarkdown } from "./markdown.js";
 import { renderGraph, legend } from "./graph.js";
 import { createChat } from "./chat.js";
 import { createResources } from "./resources.js";
+import { createActivity } from "./activity.js";
 
 const $app = document.getElementById("app");
 const $bar = document.getElementById("bar");
@@ -200,7 +201,9 @@ async function workspace(nid, cid) {
     <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize the chat panel" tabindex="0" aria-valuemin="30" aria-valuemax="80" aria-valuenow="${prefs.w}"></div>
     <aside class="chatpane" id="chatpane" aria-label="Chat with Aasaan">
       <header class="chat-h"><span class="chat-name">${logoSvg("head-logo")} Aasaan</span>
+        <div class="vseg chat-tabs" role="group" aria-label="Chat or activity"><button id="ct-chat" aria-pressed="true" type="button">Chat</button><button id="ct-act" aria-pressed="false" type="button">Activity</button></div>
         <button class="iconbtn" id="dissolve" aria-label="Hide chat" aria-keyshortcuts="Control+." title="Hide chat (Ctrl+.)">${ICON.right}</button></header>
+      <div class="activity" id="activity" hidden aria-label="Activity"></div>
       <div class="msgs" id="msgs" role="log" aria-live="polite" aria-label="Conversation"></div>
       <button class="jump" id="jump" type="button" hidden>New messages ↓</button>
       <div class="chat-compose" id="chatcompose">
@@ -229,6 +232,10 @@ async function workspace(nid, cid) {
     notifyUnread: () => { document.getElementById("chatdot").hidden = false; document.getElementById("tabdot").hidden = false; },
     openChat: () => S.panes.open(), onChip: chatChip, afterEdit: () => api("notebooks/" + nid).then(onSnapshot).catch(() => {}), wireMic: (btn, onText) => wireMic(btn, onText, () => lang()),
   });
+  S.activity = createActivity({ nid, api, getChapters: () => S.nb?.chapters, openChapter: (id) => { document.getElementById("vt-course")?.click(); loadChapter(id, false, false); } });
+  const pane = document.getElementById("chatpane");
+  const showTab = (t) => { pane.dataset.tab = t; document.getElementById("ct-chat").setAttribute("aria-pressed", String(t === "chat")); document.getElementById("ct-act").setAttribute("aria-pressed", String(t === "activity")); if (t === "activity") S.activity.draw(); };
+  document.getElementById("ct-chat").onclick = () => showTab("chat"); document.getElementById("ct-act").onclick = () => showTab("activity");
   api(`notebooks/${nid}/companion?learner_id=${S.learner}`).then((c) => { S.companion = c.message; renderNote(); }).catch(() => {});
   connect(nid);
 }
@@ -345,7 +352,7 @@ function connect(nid) {
 
 function onSnapshot(nb) {
   const cur = S.chapter, hadChapters = !!(S.nb && S.nb.chapters.length);
-  S.nb = nb; renderHead(); renderSide(); S.chat?.onSnapshot(nb); S.res?.onSnapshot();
+  S.nb = nb; renderHead(); renderSide(); S.chat?.onSnapshot(nb); S.res?.onSnapshot(); S.activity?.refresh(nb.decision_seq);
   if (!S.chapter || !hadChapters || nb.status === "failed") settleCourse();
   flashEdits(nb);
   const crumb = document.querySelector(".crumb");   // the chapter count can change under the reader (an applied or undone edit)
