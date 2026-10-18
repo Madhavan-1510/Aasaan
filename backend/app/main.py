@@ -16,11 +16,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.gzip import GZipMiddleware
+
+from .security_headers import SecurityHeadersMiddleware
 
 from .db import Store
 from .engine import Engine, UserError
@@ -120,6 +123,56 @@ def create_app(db_path: Optional[str] = None, provider_override=None, self_test_
 
     app = FastAPI(title="Aasaan", lifespan=lifespan)
     app.state.engine, app.state.router, app.state.store, app.state.worker, app.state.tools = engine, router, store, worker, tools
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # ============================================================== csp report
+    csp_report_lock = threading.Lock()
+    csp_report_timestamps: list[float] = []
+    CSP_MAX_BODY = 16384
+
+    @app.post("/csp-report", status_code=204)
+    @app.post("/api/csp-report", status_code=204)
+    async def csp_report_endpoint(request: Request):
+        """Receive and log Content Security Policy violation reports."""
+        cl = request.headers.get("content-length")
+        if cl:
+            try:
+                if int(cl) > CSP_MAX_BODY:
+                    return Response(status_code=204)
+            except ValueError:
+                return Response(status_code=204)
+
+        body = await request.body()
+        if len(body) > CSP_MAX_BODY:
+            return Response(status_code=204)
+
+        now = time.time()
+        with csp_report_lock:
+            cutoff = now - 60.0
+            while csp_report_timestamps and csp_report_timestamps[0] < cutoff:
+                csp_report_timestamps.pop(0)
+            if len(csp_report_timestamps) >= 60:
+                return Response(status_code=204)
+            csp_report_timestamps.append(now)
+
+        if body:
+            try:
+                data = json.loads(body.decode("utf-8", errors="replace"))
+                rep = data.get("csp-report", data) if isinstance(data, dict) else {}
+                if isinstance(rep, dict):
+                    def _clean_uri(u: str) -> str:
+                        return (u.split("?", 1)[0] if isinstance(u, str) else "")[:120]
+
+                    blocked = _clean_uri(rep.get("blocked-uri", ""))
+                    directive = str(rep.get("violated-directive", rep.get("effective-directive", "")))[:60]
+                    doc = _clean_uri(rep.get("document-uri", ""))
+                    disp = str(rep.get("disposition", "report"))[:20]
+                    log_.warning("[csp-report] blocked_uri=%s directive=%s document=%s disposition=%s", blocked, directive, doc, disp)
+            except Exception:
+                pass
+
+        return Response(status_code=204)
 
     @app.middleware("http")
     async def no_cache_ui(request, call_next):  # always serve the latest UI files
